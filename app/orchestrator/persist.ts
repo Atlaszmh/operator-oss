@@ -1,9 +1,9 @@
 // localStorage + URL persistence for the open project/task, layout and prefs.
-import type { Appearance, Layout, Settings } from "./types";
+import type { Appearance, Layout, Settings, TaskView } from "./types";
 
 export const LS = "orchestrator_ui_v2";
 
-type Persisted = { selProj?: string; selTask?: string; appearance?: Partial<Appearance>; layout?: Layout; settings?: Settings };
+type Persisted = { selProj?: string; selTask?: string; appearance?: Partial<Appearance>; layout?: Layout; settings?: Settings; taskView?: TaskView };
 
 export function loadPersist(): Persisted {
   if (typeof window === "undefined") return {};

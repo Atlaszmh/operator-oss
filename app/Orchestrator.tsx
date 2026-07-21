@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Icon } from "./icons";
 import { TerminalView, type TermApi } from "./Terminal";
-import { PROJ_W, TASK_W, DEFAULT_LAYOUT } from "./orchestrator/types";
+import { PROJ_W, TASK_W, BOARD_MIN_W, DEFAULT_LAYOUT } from "./orchestrator/types";
 import { useOrchestrator } from "./orchestrator/useOrchestrator";
 import { ProjectsColumn } from "./orchestrator/ProjectsColumn";
 import { TasksColumn } from "./orchestrator/TasksColumn";
@@ -152,9 +152,13 @@ export default function Orchestrator() {
     <TasksColumn
       mobile={isMobile}
       onBack={isMobile ? () => window.history.back() : undefined}
-      width={layout.taskW} onCollapse={() => o.setLayout((l) => ({ ...l, taskCollapsed: true }))}
+      // Board mode needs breathing room: widen the column past the user's list
+      // width so several status columns are visible without dragging the divider.
+      width={o.taskView === "board" && !isMobile ? Math.max(layout.taskW, BOARD_MIN_W) : layout.taskW}
+      onCollapse={() => o.setLayout((l) => ({ ...l, taskCollapsed: true }))}
       project={project} agents={o.agents} tasks={o.realTasks} suggested={o.suggested} selTaskId={selTask} running={o.running} blockedBy={o.blockedBy}
       loading={o.tasksLoading}
+      view={o.taskView} onSetView={o.setTaskView} onMoveTask={o.moveTask}
       onSelectTask={o.setSelTask} onNewTask={() => o.setModal("task")} onEditContext={() => o.setModal("context")}
       onShowSessions={() => o.setModal("sessions")} onShowRecap={() => o.setSelTask(null)} onEditTask={o.setEditId}
       onStartSuggestion={o.startSuggestion} onAcceptSuggestion={o.acceptSuggestion} onDismissSuggestion={o.dismissSuggestion}
@@ -441,6 +445,7 @@ export default function Orchestrator() {
           commands={([
             { id: "new-project", label: "New project", keywords: "create add repo", icon: Icon.plus(), run: () => o.setModal("project") },
             project && { id: "new-task", label: "New task", hint: `in ${project.name}`, keywords: "new session create start", icon: Icon.plus(), run: () => o.setModal("task") },
+            project && { id: "toggle-task-view", label: o.taskView === "board" ? "Show tasks as list" : "Show tasks as board", keywords: "kanban board list columns view", icon: o.taskView === "board" ? Icon.list() : Icon.board(), run: () => o.setTaskView(o.taskView === "board" ? "list" : "board") },
             { id: "toggle-theme", label: "Toggle theme", hint: isDark ? "switch to light" : "switch to dark", keywords: "dark light mode appearance", icon: isDark ? Icon.sun() : Icon.moon(), run: () => o.setAppearance("theme", isDark ? "light" : "dark") },
             { id: "open-settings", label: "Open Settings", keywords: "preferences defaults setup", icon: Icon.gear(), run: () => openSettings() },
             { id: "open-insights", label: "Open Insights", keywords: "usage spend cost tokens analytics dashboard metrics stats", icon: Icon.chart(), run: () => o.setView("insights") },

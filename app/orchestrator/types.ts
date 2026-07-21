@@ -217,6 +217,13 @@ export const permissionOptions = (caps?: AgentCapabilities): PickerOption[] => w
 // list grows past SEARCH_MIN, so small workspaces stay clutter-free.
 export const SEARCH_MIN = 6;
 
+// How the middle column renders a project's tasks: the grouped list, or a
+// kanban board with live status columns. Persisted alongside the other prefs.
+export type TaskView = "list" | "board";
+// In board mode the tasks column is widened to at least this so two-plus
+// columns are visible without the user having to drag the divider first.
+export const BOARD_MIN_W = 560;
+
 // Which surface fills the work area (the right two columns). "workspace" is the
 // normal tasks+session view; "settings" replaces it with the app settings shell;
 // "insights" with the usage/analytics dashboard. Mirrored into the URL

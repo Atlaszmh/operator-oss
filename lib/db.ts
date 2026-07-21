@@ -72,6 +72,7 @@ export function init(db: Database.Database) {
       started     INTEGER NOT NULL DEFAULT 0,
       running     INTEGER NOT NULL DEFAULT 0,
       awaiting_input INTEGER NOT NULL DEFAULT 0,
+      position    INTEGER NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL
     );
@@ -333,6 +334,27 @@ export function migrate(db: Database.Database) {
   if (!taskCols.includes("agent")) db.exec("ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'");
   // GitHub PR opened from this task's branch via "Create PR" ("" = none yet).
   if (!taskCols.includes("pr_url")) db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
+  // Manual task ordering (list groups + board columns both render in position
+  // order). Backfill matches the sort that was implicit before the column
+  // existed — priority then created_at, per project — so an upgrade doesn't
+  // visibly reshuffle anyone's list.
+  if (!taskCols.includes("position")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
+    db.exec(`
+      UPDATE tasks SET position = (
+        SELECT COUNT(*) FROM tasks t2
+        WHERE t2.project_id = tasks.project_id
+          AND (
+            (CASE t2.priority WHEN 'hi' THEN 0 WHEN 'med' THEN 1 ELSE 2 END)
+              < (CASE tasks.priority WHEN 'hi' THEN 0 WHEN 'med' THEN 1 ELSE 2 END)
+            OR ((CASE t2.priority WHEN 'hi' THEN 0 WHEN 'med' THEN 1 ELSE 2 END)
+                  = (CASE tasks.priority WHEN 'hi' THEN 0 WHEN 'med' THEN 1 ELSE 2 END)
+                AND (t2.created_at < tasks.created_at
+                     OR (t2.created_at = tasks.created_at AND t2.id < tasks.id)))
+          )
+      )
+    `);
+  }
 
   // Orphan-reaping pid tracking for managed services (added after the services
   // table shipped; see lib/services.ts restoreServices).

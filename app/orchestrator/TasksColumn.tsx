@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { isAwaiting, relTime } from "./format";
-import { SLABEL, AWAIT_LABEL, SEARCH_MIN, type ProjectRow, type TaskRow, type AgentsBundle } from "./types";
+import { SLABEL, AWAIT_LABEL, SEARCH_MIN, type ProjectRow, type TaskRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel } from "./agents";
 import { StatusDot, PriPill, SearchBar, AgentBadge } from "./shared";
 import { TaskCardSkeleton } from "./Layout";
+import { TaskBoard } from "./TaskBoard";
 
 function TaskCard({ task, agents, selected, running, blockedBy, onSelect }: { task: TaskRow; agents: AgentsBundle; selected: boolean; running: boolean; blockedBy?: string[]; onSelect: () => void }) {
   const sessionCount = task.started ? task.generation : Math.max(0, task.generation - 1);
@@ -81,8 +82,10 @@ function useCollapsed(key: string, def: boolean) {
   return [collapsed, toggle] as const;
 }
 
-export function TasksColumn({ project, agents, tasks, suggested, selTaskId, running, blockedBy, width, loading, onSelectTask, onNewTask, onEditContext, onShowSessions, onShowRecap, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, onCollapse, mobile, onBack }: {
+export function TasksColumn({ project, agents, tasks, suggested, selTaskId, running, blockedBy, width, loading, view, onSetView, onMoveTask, onSelectTask, onNewTask, onEditContext, onShowSessions, onShowRecap, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, onCollapse, mobile, onBack }: {
   project: ProjectRow; agents: AgentsBundle; tasks: TaskRow[]; suggested: TaskRow[]; selTaskId: string | null; running: Set<string>; blockedBy: Map<string, string[]>; width: number; loading?: boolean;
+  view: TaskView; onSetView: (v: TaskView) => void;
+  onMoveTask: (id: string, patch: Partial<Pick<TaskRow, "status" | "suggested">>, orderedIds: string[]) => void;
   onSelectTask: (id: string) => void; onNewTask: () => void; onEditContext: () => void; onShowSessions: () => void; onShowRecap: () => void;
   onEditTask: (id: string) => void; onCollapse: () => void;
   onStartSuggestion: (id: string) => void; onAcceptSuggestion: (id: string) => void; onDismissSuggestion: (id: string) => void;
@@ -120,6 +123,10 @@ export function TasksColumn({ project, agents, tasks, suggested, selTaskId, runn
           </button>
           <button className="btn btn-line btn-sm" onClick={onShowSessions} title="Agent sessions run under this project">{Icon.clock()} Sessions</button>
           <button className="btn btn-line btn-sm" onClick={onNewTask}>{Icon.plus()} Task</button>
+          <div className="view-toggle" role="tablist" aria-label="Task layout">
+            <button className={view === "list" ? "on" : ""} role="tab" aria-selected={view === "list"} title="List view" onClick={() => onSetView("list")}>{Icon.list()}</button>
+            <button className={view === "board" ? "on" : ""} role="tab" aria-selected={view === "board"} title="Board view" onClick={() => onSetView("board")}>{Icon.board()}</button>
+          </div>
           {!mobile && <button className="icon-btn" onClick={onCollapse} title="Hide tasks panel">{Icon.chevRight({ style: { transform: "rotate(180deg)" } })}</button>}
         </div>
         <button className="pb-ctx" onClick={onEditContext} title="Edit project context">
@@ -137,6 +144,16 @@ export function TasksColumn({ project, agents, tasks, suggested, selTaskId, runn
           <div className="task-scroll">
             {[0, 1, 2].map((i) => <TaskCardSkeleton key={i} i={i} />)}
           </div>
+        </div>
+      ) : view === "board" ? (
+        <div className="board-wrap">
+          {noMatches && <div className="search-empty">No tasks match “{query.trim()}”.</div>}
+          <TaskBoard
+            tasks={shown} suggested={shownSuggested} agents={agents} selTaskId={selTaskId}
+            running={running} blockedBy={blockedBy} canDrag={!q}
+            onSelect={onSelectTask} onEditTask={onEditTask} onMove={onMoveTask}
+            onStartSuggestion={onStartSuggestion} onAcceptSuggestion={onAcceptSuggestion} onDismissSuggestion={onDismissSuggestion}
+          />
         </div>
       ) : (
       <div className="scroll">

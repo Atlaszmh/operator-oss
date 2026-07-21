@@ -147,7 +147,7 @@ export function useOrchestrator() {
   const tasksLoading = !!project && tasksFor !== project.id;
 
   // ---------- prefs (appearance/settings/layout/view) + persistence ----------
-  const { view, setView, appearance, setAppearance, settings, setSetting, setSettings, layout, setLayout, hydrated } =
+  const { view, setView, taskView, setTaskView, appearance, setAppearance, settings, setSetting, setSettings, layout, setLayout, hydrated } =
     usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask });
 
   // ---------- project recaps + landing decision ----------
@@ -425,6 +425,33 @@ export function useOrchestrator() {
     if (input.startNow) runTurn(t.id, "", true);
   };
 
+  // A board drop: optionally re-status the dragged task (it landed in another
+  // column) and persist the new manual order. `orderedIds` is the project's
+  // full task list flattened in column order. Optimistic on both counts — the
+  // card lands where it was dropped instantly; a failure reloads server truth.
+  const moveTask = useCallback(async (id: string, patch: Partial<Pick<TaskRow, "status" | "suggested">>, orderedIds: string[]) => {
+    const hasPatch = Object.keys(patch).length > 0;
+    setTasks((prev) => {
+      const byId = new Map(prev.map((t) => [t.id, t]));
+      const listed = new Set(orderedIds);
+      const next = [
+        ...orderedIds.map((tid) => byId.get(tid)).filter((t): t is TaskRow => !!t),
+        ...prev.filter((t) => !listed.has(t.id)),
+      ];
+      // Mirror the server: a manual status change clears the "your turn" flag.
+      return hasPatch ? next.map((t) => (t.id === id ? { ...t, ...patch, awaiting_input: patch.status ? 0 : t.awaiting_input } : t)) : next;
+    });
+    try {
+      if (hasPatch) {
+        const fresh = await jsend<TaskRow>(`/api/tasks/${id}`, "PATCH", patch);
+        setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, ...fresh } : x)));
+      }
+      await jsend("/api/tasks/reorder", "POST", { ids: orderedIds });
+    } catch {
+      if (selProjRef.current) void loadTasks(selProjRef.current, false);
+    }
+  }, [loadTasks]);
+
   const saveTask = async (id: string, patch: { title: string; description: string; priority: Priority; depends_on: string[] }) => {
     const fresh = await jsend<TaskRow>(`/api/tasks/${id}`, "PATCH", patch);
     setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, ...fresh } : x)));
@@ -522,7 +549,7 @@ export function useOrchestrator() {
     projects, activeProjects, deprecatedProjects, selProj, setSelProj, project,
     tasks, realTasks, suggested, selTask, task, messages, running,
     blockedBy, liveAwaiting, needsYouTotal,
-    modal, setModal, editId, setEditId, view, setView,
+    modal, setModal, editId, setEditId, view, setView, taskView, setTaskView,
     appearance, setAppearance, appearanceOpen, setAppearanceOpen,
     settings, setSetting, appDefaults, setAppDefault, agents,
     onboarding, wizardOpen, finishWizard, rerunOnboarding, nudge, setNudge, onMerged, onPrCreated,
@@ -532,7 +559,7 @@ export function useOrchestrator() {
     // actions
     setSelTask, fetchRecap, runTurn, answerQuestion, stopTurn, cancelQueued, resolveConflictsWithAI,
     selectProject, jumpToNeedsYou, goToTask, clearSession, setStatus, setPriority, setModel,
-    setReasoning, setPermission, createTask, saveTask, removeTask, startSuggestion, acceptSuggestion,
+    setReasoning, setPermission, createTask, saveTask, removeTask, moveTask, startSuggestion, acceptSuggestion,
     dismissSuggestion, saveContext, createProject, reorderProjects, removeProject, setDeprecated,
     resetSettings, setProjectDefaultAgent,
   };
