@@ -87,7 +87,7 @@ function AccountSection() {
 // agent) gets a "connect another agent" card driven by AgentConnect against the
 // generic /api/agents/[id]/* routes. Reads the same GET /api/agents the task
 // pickers gate on, so connecting here immediately un-grays the agent there.
-function AgentsSection({ defaultAgent }: { defaultAgent: string }) {
+function AgentsSection({ defaultAgent, onChanged }: { defaultAgent: string; onChanged?: () => void }) {
   const [agents, setAgents] = useState<AgentInfoT[] | null>(null);
   const [def, setDef] = useState<string>(defaultAgent);
 
@@ -111,7 +111,7 @@ function AgentsSection({ defaultAgent }: { defaultAgent: string }) {
             {a.id === def && <span className="opt">— default</span>}
             {a.connected && <span className="wiz-ok" style={{ marginLeft: "auto" }}>{Icon.check()}</span>}
           </div>
-          <AgentConnect agent={a} compact onConnected={load} />
+          <AgentConnect agent={a} compact onConnected={() => { load(); onChanged?.(); }} />
         </div>
       ))}
     </div>
@@ -132,12 +132,13 @@ const SETTINGS_SECTIONS: { id: string; label: string; icon: () => React.ReactNod
   { id: "setup", label: "Setup", icon: Icon.bolt },
 ];
 
-export function SettingsView({ settings, setSetting, appDefaults, setAppDefault, agents, onReset, onRerunSetup, onClose, initialSection }: {
+export function SettingsView({ settings, setSetting, appDefaults, setAppDefault, agents, onAgentsRefresh, onReset, onRerunSetup, onClose, initialSection }: {
   settings: Settings;
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void;
   appDefaults: Record<string, string>;
   setAppDefault: (key: string, value: string | null) => void;
   agents: AgentsBundle;
+  onAgentsRefresh?: () => void;
   onReset: () => void;
   onRerunSetup: () => void;
   onClose: () => void;
@@ -310,7 +311,7 @@ export function SettingsView({ settings, setSetting, appDefaults, setAppDefault,
                 </div>
               </>
             )}
-            {section === "agents" && <AgentsSection defaultAgent="claude" />}
+            {section === "agents" && <AgentsSection defaultAgent="claude" onChanged={onAgentsRefresh} />}
             {section === "storage" && <WorktreePrune />}
             {section === "github" && <GitHubSettings />}
             {section === "account" && <AccountSection />}

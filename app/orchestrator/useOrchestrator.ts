@@ -158,10 +158,15 @@ export function useOrchestrator() {
     jget<Record<string, string>>("/api/settings").then(setAppDefaults).catch(() => {});
   }, []);
 
-  // Load the agent capability bundle once (drives every run-control picker).
-  useEffect(() => {
-    jget<AgentsBundle>("/api/agents").then(setAgents).catch(() => {});
-  }, []);
+  // Load the agent capability bundle (drives every run-control picker AND the
+  // per-agent connected/authenticated status). Re-runnable: any in-app connect
+  // (wizard finish, Settings → Agents) calls this so the shared bundle — and
+  // thus the New-task dialog's "· not connected" flag — updates live, no reload.
+  const refreshAgents = useCallback(
+    () => jget<AgentsBundle>("/api/agents").then(setAgents).catch(() => {}),
+    []
+  );
+  useEffect(() => { void refreshAgents(); }, [refreshAgents]);
 
   // Onboarding: a fresh instance opens the wizard automatically; an already
   // set-up one (onboarding_complete) never sees it unless re-run from Settings.
@@ -172,6 +177,9 @@ export function useOrchestrator() {
   const finishWizard = useCallback(() => {
     setWizardOpen(false);
     jget<OnboardingT>("/api/onboarding").then(setOnboarding).catch(() => {});
+    // The wizard is the New-task dialog's "Connect" destination — pick up any
+    // agent it just connected so the shared bundle reflects it immediately.
+    void refreshAgents();
     // Land the user on the built-in tutorial: select the seeded "Welcome" project
     // and its ready "Try me" task (loadTasks(..., true) picks the first
     // non-suggested task), so the aha moment is one click away.
@@ -181,7 +189,7 @@ export function useOrchestrator() {
       setView("workspace");
       void loadTasks(seed.id, true);
     }
-  }, [projects, activeProjects, loadTasks, setView]);
+  }, [projects, activeProjects, loadTasks, setView, refreshAgents]);
 
   // "Re-run setup" from Settings: re-arm onboarding server-side and reopen it.
   const rerunOnboarding = useCallback(async () => {
@@ -524,7 +532,7 @@ export function useOrchestrator() {
     blockedBy, liveAwaiting, needsYouTotal,
     modal, setModal, editId, setEditId, view, setView,
     appearance, setAppearance, appearanceOpen, setAppearanceOpen,
-    settings, setSetting, appDefaults, setAppDefault, agents,
+    settings, setSetting, appDefaults, setAppDefault, agents, refreshAgents,
     onboarding, wizardOpen, finishWizard, rerunOnboarding, nudge, setNudge, onMerged, onPrCreated,
     layout, setLayout, accessEmail, recaps,
     termOpen, setTermOpen, termMounted, setTermMounted, termHeight, setTermHeight,
