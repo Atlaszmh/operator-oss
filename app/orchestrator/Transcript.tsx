@@ -170,7 +170,7 @@ function AttachmentStrip({ items }: { items: MsgAttachment[] }) {
   );
 }
 
-export function MessageView({ m, initial, hideWho, running, agentLabel = "The agent", onAnswer, onCancelQueued, onClear }: { m: Msg; initial: boolean; hideWho: boolean; running?: boolean; agentLabel?: string; onAnswer?: (askId: string, questions: AskQuestion[], answers: AskAnswers) => void; onCancelQueued?: (pendingId: string) => void; onClear?: () => void }) {
+export function MessageView({ m, initial, hideWho, running, agent, agentLabel = "The agent", onAnswer, onCancelQueued, onClear }: { m: Msg; initial: boolean; hideWho: boolean; running?: boolean; agent?: string | null; agentLabel?: string; onAnswer?: (askId: string, questions: AskQuestion[], answers: AskAnswers) => void; onCancelQueued?: (pendingId: string) => void; onClear?: () => void }) {
   if (m.role === "queued") {
     // A follow-up the user typed mid-turn, waiting its turn. Reads like a user
     // bubble but dimmed, tagged "Queued", with an × to drop it before it runs.
@@ -227,7 +227,7 @@ export function MessageView({ m, initial, hideWho, running, agentLabel = "The ag
     <div className={`msg ${isUser ? "user" : "assistant"} ${initial ? "initial" : ""}`}>
       {!hideWho && (
         <div className="who">
-          <Avatar who={isUser ? "user" : "cc"} />
+          <Avatar who={isUser ? "user" : "cc"} agent={agent} />
           {isUser ? "You" : "Agent"}
           {initial && <span className="badge">initial prompt</span>}
         </div>

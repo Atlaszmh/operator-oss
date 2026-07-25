@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Priority, Status } from "@/lib/types";
-import { Icon } from "../icons";
+import { Icon, AgentMark } from "../icons";
 import { SCLS, SLABEL, AWAIT_LABEL } from "./types";
 
 export function StatusDot({ status, running, awaiting, lg }: { status: Status; running?: boolean; awaiting?: boolean; lg?: boolean }) {
@@ -39,8 +39,13 @@ export function SearchBar({ value, onChange, placeholder }: { value: string; onC
   );
 }
 
-export function Avatar({ who }: { who: "user" | "cc" }) {
-  return who === "user" ? <span className="av you">A</span> : <span className="av cc">{Icon.bolt()}</span>;
+// Chat avatar. The assistant side wears the brand mark of the agent the task
+// actually runs on (Claude / Codex), so a transcript says at a glance who wrote
+// it; an unknown or missing agent id falls back to the generic bolt.
+export function Avatar({ who, agent }: { who: "user" | "cc"; agent?: string | null }) {
+  if (who === "user") return <span className="av you">A</span>;
+  const mark = agent ? AgentMark[agent] : undefined;
+  return <span className={`av cc${mark ? ` ${agent}` : ""}`}>{mark ? mark() : Icon.bolt()}</span>;
 }
 
 // Which agent driver a task runs under (Claude Code / Codex …). Hidden when only

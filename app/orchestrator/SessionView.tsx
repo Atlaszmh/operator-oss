@@ -243,12 +243,12 @@ export function SessionView({ project, task, agents, messages, running, blockedB
                 const prev = s.messages[mi - 1];
                 // collapse the repeated "Claude Code" header across an assistant run (text → tool → text)
                 const hideWho = m.role === "assistant" && !!prev && (prev.role === "assistant" || prev.role === "tool");
-                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agentLabel={agentLabel(agents, task.agent)} onAnswer={onAnswer} onCancelQueued={onCancelQueued} onClear={onClear} />;
+                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agent={task.agent} agentLabel={agentLabel(agents, task.agent)} onAnswer={onAnswer} onCancelQueued={onCancelQueued} onClear={onClear} />;
               })}
             </div>
           ))}
           {running && !awaitingAnswer && (
-            <div className="msg assistant"><div className="who"><Avatar who="cc" /> Agent</div><div className="msg-body"><span className="typing"><i /><i /><i /></span></div></div>
+            <div className="msg assistant"><div className="who"><Avatar who="cc" agent={task.agent} /> Agent</div><div className="msg-body"><span className="typing"><i /><i /><i /></span></div></div>
           )}
           {/* Follow-ups queued mid-turn, pinned below the live turn — they
               send in order once it ends. */}
