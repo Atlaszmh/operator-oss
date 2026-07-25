@@ -186,17 +186,22 @@ export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blocke
     onMove(t.id, patch, orderedIds);
   };
 
+  // On hold / Cancelled aren't part of the core flow: at rest they only appear
+  // when something is in them — but while a drag they'd accept is live, they
+  // materialise as empty drop bays so every status stays reachable without
+  // permanent column bloat. Bays are APPENDED after the resting columns:
+  // splicing them into their canonical slot would shift the columns to their
+  // right mid-drag, moving the drop target out from under the cursor.
+  const resting = COL_ORDER.filter((k) => COLS[k].always || cols.get(k)!.length > 0);
+  const bays = COL_ORDER.filter(
+    (k) => !resting.includes(k) && !!dragTask && COLS[k].patchFor(dragTask) !== null
+  );
+
   return (
     <div className="board">
-      {COL_ORDER.map((key) => {
+      {[...resting, ...bays].map((key) => {
         const def = COLS[key];
         const colTasks = cols.get(key)!;
-        // On hold / Cancelled aren't part of the core flow: at rest they only
-        // appear when something is in them — but while a drag they'd accept is
-        // live, they materialise as empty drop bays so every status stays
-        // reachable without permanent column bloat.
-        const dropBay = !def.always && colTasks.length === 0;
-        if (dropBay && !(dragTask && def.patchFor(dragTask) !== null)) return null;
         const accepts = !!dragTask && def.patchFor(dragTask) !== null;
         const reject = !!dragTask && !accepts;
         const isOver = over?.col === key;
