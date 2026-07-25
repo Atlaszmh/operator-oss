@@ -246,6 +246,7 @@ export default function Orchestrator() {
       appDefaults={o.appDefaults}
       setAppDefault={o.setAppDefault}
       agents={o.agents}
+      onAgentsRefresh={o.refreshAgents}
       onReset={o.resetSettings}
       onRerunSetup={o.rerunOnboarding}
       onClose={() => o.setView("workspace")}
