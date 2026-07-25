@@ -35,7 +35,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 - **Reconnect-safe turns** — turns run server-side; reload or sleep the laptop and the transcript catches up. Queue follow-ups mid-turn.
 - **Integrated terminal + managed services** — a real shell per project, plus supervised dev/setup/test processes that survive restarts, with live logs and optional public URLs.
 - **Cost tracking + insights** — live per-task spend and a local analytics dashboard.
-- **List or kanban board** — flip the tasks panel to live status columns (Suggested / Not started / In progress / Needs input / Done); drag cards to reorder or change status.
+- **List or kanban board** — flip the workspace to a full-width board of live status columns (Suggested / Not started / In progress / Needs input / Done); drag cards to reorder or change status, click one to open its session in a slide-over. ⌘⇧B toggles.
 - Plus: agent-suggested tasks, task dependencies, image attachments, clone from GitHub, recaps, a first-run tutorial.
 
 **Watch the session stream — tool calls, edits, questions:**
