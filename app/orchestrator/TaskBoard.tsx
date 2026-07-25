@@ -111,7 +111,7 @@ function BoardCard({ task, agents, selected, running, blockedBy, mini, dragging,
   return (
     <article
       role="button" tabIndex={0}
-      className={`bcard ${mini ? "mini" : ""} ${selected ? "sel" : ""} ${awaiting ? "needs" : ""} ${running ? "working" : ""} ${task.suggested ? "bsug" : ""} ${dragging ? "dragging" : ""}`}
+      className={`bcard ${mini ? "mini" : ""} ${selected ? "sel" : ""} ${awaiting ? "needs" : ""} ${running ? "working" : ""} ${dragging ? "dragging" : ""}`}
       onClick={onSelect}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } }}
       draggable={canDrag}
@@ -122,7 +122,7 @@ function BoardCard({ task, agents, selected, running, blockedBy, mini, dragging,
       title={canDrag ? "Drag to move / reorder" : undefined}
     >
       <div className="bc-top">
-        {task.suggested ? <span className="sdot sug" title="Suggested by an agent" /> : <StatusDot status={task.status} running={running} awaiting={awaiting} />}
+        <StatusDot status={task.status} running={running} awaiting={awaiting} />
         <h3 className="bc-title">{task.title}</h3>
         {!mini && <PriPill p={task.priority} />}
       </div>
@@ -221,7 +221,7 @@ export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blocke
             onDrop={(e) => { e.preventDefault(); drop(key, colTasks.length); }}
           >
             <div className="bcol-h">
-              <span className={`cn ${def.accent ? "needs-you" : ""}`}>{def.label}</span>
+              <span className={`cn ${def.accent ? "needs-you" : ""}`}>{key === "suggested" && Icon.spark()}{def.label}</span>
               <span className={`ct ${def.accent ? "needs-you" : ""}`}>{colTasks.length}</span>
               <span className="sp" />
               {def.derived && <span className="derived" title="Reflects agent/session state — drag cards out, not in">derived</span>}

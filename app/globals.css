@@ -424,7 +424,16 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 /* the board scrolls horizontally; each column scrolls vertically */
 .board-wrap{flex:1;min-height:0;display:flex;flex-direction:column;}
 .board{flex:1;min-height:0;display:flex;gap:10px;align-items:stretch;overflow-x:auto;overflow-y:hidden;padding:14px 14px 0;}
-.bcol{flex:0 0 218px;display:flex;flex-direction:column;min-height:0;border-radius:var(--r-lg);position:relative;transition:background .15s;}
+/* columns share the workspace width (grow evenly, capped so cards keep a card
+   shape); past the cap — or with many columns — the board scrolls sideways */
+.bcol{flex:1 1 218px;min-width:218px;max-width:340px;display:flex;flex-direction:column;min-height:0;border-radius:var(--r-lg);position:relative;transition:background .15s;}
+/* the Suggested column IS the list's suggestion tray, turned into a column:
+   same dashed accent shell, wash, and spark header */
+.bcol.k-suggested{border:1px dashed var(--accent);background:var(--accent-soft);padding:0 4px;}
+.bcol.k-suggested .bcol-h .cn{color:var(--accent-ink);display:flex;align-items:center;gap:6px;}
+[data-theme="dark"] .bcol.k-suggested .bcol-h .cn{color:#D98C6A;}
+.bcol.k-suggested .bcol-h .cn svg{width:11px;height:11px;}
+.bcol.k-suggested .bcol-rule{background:transparent;}
 .bcol-h{flex:0 0 auto;height:30px;display:flex;align-items:center;gap:8px;padding:0 6px;}
 .bcol-h .cn{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap;}
 .bcol-h .ct{font-family:var(--mono);font-size:9.5px;font-weight:700;color:var(--ink-4);background:var(--raise);border:1px solid var(--line-2);border-radius:999px;min-width:20px;text-align:center;padding:2px 5px;}
@@ -432,11 +441,12 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .bcol-h .ct.needs-you{color:var(--blue);border-color:var(--blue-soft);}
 .bcol-h .sp{flex:1;}
 .bcol-h .derived{font-family:var(--mono);font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);border:1px solid var(--line);border-radius:4px;padding:2px 4px;}
-/* per-column status rule under the header */
+/* per-column status rule under the header — solid, in the same colors the
+   status dots use, so columns read as the list's groups turned sideways */
 .bcol-rule{flex:0 0 auto;height:2px;border-radius:2px;background:var(--line);margin:0 4px 9px;}
-.bcol.k-suggested .bcol-rule{background:repeating-linear-gradient(90deg,var(--line) 0 4px,transparent 4px 8px);}
-.bcol.k-awaiting .bcol-rule{background:repeating-linear-gradient(90deg,var(--blue) 0 5px,var(--blue-soft) 5px 10px);}
+.bcol.k-awaiting .bcol-rule{background:linear-gradient(90deg,var(--blue),var(--blue-soft));}
 .bcol.k-in_progress .bcol-rule{background:linear-gradient(90deg,var(--amber),var(--amber-soft));}
+.bcol.k-on_hold .bcol-rule{background:linear-gradient(90deg,#8b7fd6,transparent);}
 .bcol.k-done .bcol-rule{background:linear-gradient(90deg,var(--green),var(--green-soft));}
 .bcol-body{flex:1;min-height:60px;overflow-y:auto;padding:0 4px 18px;display:flex;flex-direction:column;gap:8px;}
 .b-slot{display:flex;flex-direction:column;gap:8px;flex:0 0 auto;}
@@ -485,9 +495,8 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 @keyframes brail{0%,100%{opacity:1;}50%{opacity:.35;}}
 .bcard.working{border-color:var(--amber);}
 .bcard.working::before{content:"";position:absolute;left:-1px;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:linear-gradient(180deg,var(--amber),var(--blue));opacity:.9;}
-/* suggested: dashed shell + dashed dot + quick actions */
-.bcard.bsug{background:var(--surface-2);border-style:dashed;border-color:var(--line-strong);}
-.sdot.sug{width:9px;height:9px;border-radius:50%;flex:0 0 auto;display:inline-block;background:transparent;border:1.5px dashed var(--blue);box-sizing:border-box;opacity:.85;}
+/* suggested cards look like every other card (the column header carries the
+   "proposed by an agent" framing); they just add the quick-action row */
 .bsug-acts{display:flex;gap:6px;margin-top:9px;}
 .bsug-acts button{flex:1;font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:5px 0;border-radius:5px;border:1px solid var(--line);background:transparent;color:var(--ink-3);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;}
 .bsug-acts button:hover{color:var(--ink);border-color:var(--line-strong);}
@@ -516,7 +525,7 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .bpanel-bar .bp-hint{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);}
 .bpanel-bar .spacer{flex:1;}
 .bpanel .session-body{flex:1;min-height:0;display:flex;}
-.app.mobile .bcol{flex-basis:min(78vw,260px);}
+.app.mobile .bcol{flex:0 0 min(78vw,260px);}
 /* toolbar pill — the cross-project count */
 .needs-you-pill{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 11px;border-radius:999px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;font-weight:500;color:var(--coral);background:var(--coral-soft);border:1px solid var(--coral-soft);cursor:pointer;transition:filter .12s;}
 .needs-you-pill:hover{filter:brightness(1.12);}
