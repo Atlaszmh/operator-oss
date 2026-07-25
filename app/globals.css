@@ -629,14 +629,17 @@ a.tc-btn{display:inline-flex;align-items:center;text-decoration:none;line-height
 .msg .who .badge{font-size:9px;padding:1px 5px;border-radius:4px;background:var(--surface-2);color:var(--ink-3);letter-spacing:.04em;}
 .msg .who .av{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:10px;}
 .msg .who .av.you{background:linear-gradient(135deg,#C2603C,#D89A3A);}
-/* Assistant chip: the agent's own brand mark. Claude wears its clay; Codex
-   (a monochrome mark) inverts against the theme — chip in --ink, glyph in --bg
-   — so it stays legible in both light and dark. The generic fallback inverts
-   the same way (a #fff glyph on the near-white --ink chip read as a blank
-   square in dark mode). */
-.msg .who .av.cc{background:var(--ink);color:var(--bg);}
-.msg .who .av.cc.claude{background:#D97757;color:#fff;}
+/* Assistant side: the agent's brand mark, drawn bare (no chip) in brand colour
+   and near chip-size. Both marks are fine-detail logos — the Claude burst's
+   rays and the Codex knot's loops fall below a pixel inside an 11px glyph on a
+   chip and blur into a solid blob, which is what made the old avatar read as a
+   plain square. Bare + 16px keeps the detail legible at 1x. Claude wears its
+   clay in both themes; the monochrome Codex mark follows --ink. */
+.msg .who .av.cc{color:var(--ink-2);}
+.msg .who .av.cc.claude{color:#D97757;}
+.msg .who .av.cc.codex{color:var(--ink);}
 .msg .who .av svg{width:11px;height:11px;}
+.msg .who .av.cc svg{width:16px;height:16px;}
 .msg-body{font-size:14px;line-height:1.6;color:var(--ink);}
 .msg-body p{margin:0 0 10px;}
 .msg-body p:last-child{margin-bottom:0;}
