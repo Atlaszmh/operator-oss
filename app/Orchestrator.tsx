@@ -7,6 +7,7 @@ import { PROJ_W, TASK_W, DEFAULT_LAYOUT } from "./orchestrator/types";
 import { useOrchestrator } from "./orchestrator/useOrchestrator";
 import { ProjectsColumn } from "./orchestrator/ProjectsColumn";
 import { TasksColumn } from "./orchestrator/TasksColumn";
+import { BoardWorkspace } from "./orchestrator/TaskBoard";
 import { SessionView } from "./orchestrator/SessionView";
 import { ProjectLanding } from "./orchestrator/ProjectLanding";
 import { SettingsView } from "./orchestrator/SettingsView";
@@ -120,6 +121,43 @@ export default function Orchestrator() {
     return () => window.removeEventListener("keydown", onKey);
   }, [omniEnabled]);
 
+  // Board mode (desktop): the board replaces BOTH the tasks column and the
+  // session pane — it owns everything right of the projects sidebar. On mobile
+  // the board still renders inside the tasks pane (single-pane navigation).
+  const boardMode = o.taskView === "board" && !isMobile && o.view === "workspace" && !!project;
+  // The slide-over session panel opens only from an explicit card click — the
+  // app's auto-selection paths (landing on a project picks its first task)
+  // just highlight the card, they don't pop a panel over the board.
+  const [boardPanel, setBoardPanel] = useState(false);
+  const openBoardTask = (id: string) => { o.setSelTask(id); setBoardPanel(true); };
+  const closeBoardPanel = () => { setBoardPanel(false); o.setSelTask(null); };
+  const setTaskView = (v: "list" | "board") => {
+    if (v === "board") setBoardPanel(false);
+    o.setTaskView(v);
+  };
+
+  // ⌘⇧B — flip list/board (sticky, same pref the header toggles write).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setTaskView(o.taskView === "board" ? "list" : "board");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Esc closes the board's slide-over session panel (back to the full board).
+  useEffect(() => {
+    if (!boardMode || !task || !boardPanel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !paletteOpen) { e.preventDefault(); closeBoardPanel(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   // Server-side time-in-app + retention pulse: ping on load, then every 2 min
   // while the tab is open. The route turns the first ping (or one after a long
   // gap) into app_opened and the rest into heartbeat (see app/api/heartbeat).
@@ -152,9 +190,11 @@ export default function Orchestrator() {
     <TasksColumn
       mobile={isMobile}
       onBack={isMobile ? () => window.history.back() : undefined}
-      width={layout.taskW} onCollapse={() => o.setLayout((l) => ({ ...l, taskCollapsed: true }))}
+      width={layout.taskW}
+      onCollapse={() => o.setLayout((l) => ({ ...l, taskCollapsed: true }))}
       project={project} agents={o.agents} tasks={o.realTasks} suggested={o.suggested} selTaskId={selTask} running={o.running} blockedBy={o.blockedBy}
       loading={o.tasksLoading}
+      view={o.taskView} onSetView={setTaskView} onMoveTask={o.moveTask}
       onSelectTask={o.setSelTask} onNewTask={() => o.setModal("task")} onEditContext={() => o.setModal("context")}
       onShowSessions={() => o.setModal("sessions")} onShowRecap={() => o.setSelTask(null)} onEditTask={o.setEditId}
       onStartSuggestion={o.startSuggestion} onAcceptSuggestion={o.acceptSuggestion} onDismissSuggestion={o.dismissSuggestion}
@@ -228,6 +268,80 @@ export default function Orchestrator() {
         />
       )}
     </div>
+  );
+
+  // Board mode's full-workspace surface: header + board, with the slide-over
+  // session panel and the project drawers mounted on top (so the titlebar's
+  // Services/Terminal toggles keep working while the board is up).
+  const boardWorkspace = project && (
+    <BoardWorkspace
+      project={project} agents={o.agents} tasks={o.realTasks} suggested={o.suggested}
+      selTaskId={selTask} running={o.running} blockedBy={o.blockedBy} loading={o.tasksLoading}
+      onSetView={setTaskView} onMoveTask={o.moveTask}
+      onSelectTask={openBoardTask} onNewTask={() => o.setModal("task")} onEditContext={() => o.setModal("context")}
+      onShowSessions={() => o.setModal("sessions")} onEditTask={o.setEditId}
+      onStartSuggestion={o.startSuggestion} onAcceptSuggestion={o.acceptSuggestion} onDismissSuggestion={o.dismissSuggestion}
+    >
+      {task && boardPanel && (
+        <>
+          <div className="bpanel-scrim" onClick={closeBoardPanel} />
+          <div className="bpanel">
+            <div className="bpanel-bar">
+              <button className="icon-btn" title="Expand to list + chat layout" onClick={() => o.setTaskView("list")}>{Icon.external()}</button>
+              <span className="bp-hint">esc returns to the board</span>
+              <span className="spacer" />
+              <button className="icon-btn" title="Back to board" onClick={closeBoardPanel}>{Icon.x()}</button>
+            </div>
+            <div className="session-body">
+              <SessionView
+                key={task.id}
+                project={project} task={task} agents={o.agents} messages={o.messages} running={o.running.has(task.id)} blockedBy={o.blockedBy.get(task.id)}
+                transcriptLoading={o.transcriptLoading}
+                onSend={(text) => o.runTurn(task.id, text, false)}
+                onStart={() => o.runTurn(task.id, "", true)}
+                onStop={() => o.stopTurn(task.id)}
+                onClear={() => o.clearSession(task.id)} onEdit={() => o.setEditId(task.id)}
+                onSetStatus={o.setStatus} onSetPriority={o.setPriority} onSetModel={o.setModel}
+                onSetReasoning={o.setReasoning} onSetPermission={o.setPermission}
+                onResolveWithAI={o.resolveConflictsWithAI}
+                onMerged={o.onMerged}
+                onPrCreated={o.onPrCreated}
+                onAnswer={(askId, questions, answers) => o.answerQuestion(task.id, askId, questions, answers)}
+                onCancelQueued={(pendingId) => o.cancelQueued(task.id, pendingId)}
+                railW={layout.railW}
+                onRailWidth={(w) => o.setLayout((l) => ({ ...l, railW: w }))}
+                onRailReset={() => o.setLayout((l) => ({ ...l, railW: DEFAULT_LAYOUT.railW }))}
+                railCollapsed={layout.railCollapsed}
+                onRailCollapse={() => o.setLayout((l) => ({ ...l, railCollapsed: true }))}
+                onRailExpand={() => o.setLayout((l) => ({ ...l, railCollapsed: false }))}
+              />
+            </div>
+          </div>
+        </>
+      )}
+      {features.services && o.servicesMounted && (
+        <ServicesDrawer
+          key={`svc-${project.id}`}
+          projectId={project.id}
+          hasConfig={!!(project.dev_command || project.setup_command || project.test_command)}
+          visible={o.servicesOpen}
+          height={o.servicesHeight}
+          onClose={() => o.setServicesOpen(false)}
+          onResize={o.setServicesHeight}
+        />
+      )}
+      {o.termMounted && (
+        <TerminalDrawer
+          key={project.id}
+          cwd={project.repo_path}
+          port={project.port}
+          visible={o.termOpen}
+          height={o.termHeight}
+          onClose={() => o.setTermOpen(false)}
+          onResize={o.setTermHeight}
+        />
+      )}
+    </BoardWorkspace>
   );
 
   const insightsColumn = (
@@ -377,7 +491,7 @@ export default function Orchestrator() {
               </>
             )}
 
-            {o.view === "settings" ? settingsColumn : o.view === "insights" ? insightsColumn : (
+            {o.view === "settings" ? settingsColumn : o.view === "insights" ? insightsColumn : boardMode ? boardWorkspace : (
               <>
                 {project ? (
                   layout.taskCollapsed ? (
@@ -442,6 +556,7 @@ export default function Orchestrator() {
           commands={([
             { id: "new-project", label: "New project", keywords: "create add repo", icon: Icon.plus(), run: () => o.setModal("project") },
             project && { id: "new-task", label: "New task", hint: `in ${project.name}`, keywords: "new session create start", icon: Icon.plus(), run: () => o.setModal("task") },
+            project && { id: "toggle-task-view", label: o.taskView === "board" ? "Show tasks as list" : "Show tasks as board", hint: "⌘⇧B", keywords: "kanban board list columns view", icon: o.taskView === "board" ? Icon.list() : Icon.board(), run: () => setTaskView(o.taskView === "board" ? "list" : "board") },
             { id: "toggle-theme", label: "Toggle theme", hint: isDark ? "switch to light" : "switch to dark", keywords: "dark light mode appearance", icon: isDark ? Icon.sun() : Icon.moon(), run: () => o.setAppearance("theme", isDark ? "light" : "dark") },
             { id: "open-settings", label: "Open Settings", keywords: "preferences defaults setup", icon: Icon.gear(), run: () => openSettings() },
             { id: "open-insights", label: "Open Insights", keywords: "usage spend cost tokens analytics dashboard metrics stats", icon: Icon.chart(), run: () => o.setView("insights") },

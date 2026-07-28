@@ -395,6 +395,137 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 /* tasks-column group header */
 .task-group-h.needs-you{color:var(--blue);}
 .task-group-h.needs-you .gcount{background:var(--blue-soft);color:var(--blue);}
+
+/* board (kanban) view -------------------------------------------------- */
+/* Layout ported from the Claude Design "Operator — Board View" study,
+   rendered entirely with the app's own tokens. */
+/* icon-only list/board toggle in the tasks-column (list mode) header */
+.view-toggle{display:flex;align-items:center;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;flex:0 0 auto;}
+.view-toggle button{display:flex;align-items:center;justify-content:center;width:27px;height:24px;background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:13px;transition:color .12s,background .12s;}
+.view-toggle button:hover{color:var(--ink);}
+.view-toggle button.on{background:var(--surface-2);color:var(--ink);}
+
+/* full-workspace shell: board mode owns everything right of the sidebar */
+.board-ws{flex:1;min-width:0;background:var(--surface-2);position:relative;overflow:hidden;}
+.bws-h{flex:0 0 auto;min-height:54px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel);}
+.bws-pic{width:26px;height:26px;border-radius:8px;color:#fff;font-weight:700;font-size:12px;display:grid;place-items:center;flex:0 0 auto;}
+.bws-name{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bws-count{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);border:1px solid var(--line);border-radius:999px;padding:3px 8px;white-space:nowrap;}
+.bws-h .spacer{flex:1;}
+.bws-search{width:240px;flex:0 1 auto;}
+.bws-search .search-bar{margin:0;height:28px;}
+/* labeled list/board segmented toggle (workspace header) */
+.bseg{display:flex;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:2px;gap:2px;flex:0 0 auto;}
+.bseg button{border:0;background:none;font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);padding:5px 11px;border-radius:5px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:color .12s;}
+.bseg button:hover{color:var(--ink-2);}
+.bseg button.on{background:var(--raise);color:var(--ink);box-shadow:var(--sh-1);}
+.bseg button svg{width:11px;height:11px;}
+
+/* the board scrolls horizontally; each column scrolls vertically */
+.board-wrap{flex:1;min-height:0;display:flex;flex-direction:column;}
+.board{flex:1;min-height:0;display:flex;gap:10px;align-items:stretch;overflow-x:auto;overflow-y:hidden;padding:14px 14px 0;}
+/* columns share the workspace width (grow evenly, capped so cards keep a card
+   shape); past the cap — or with many columns — the board scrolls sideways */
+.bcol{flex:1 1 218px;min-width:218px;max-width:340px;display:flex;flex-direction:column;min-height:0;border-radius:var(--r-lg);position:relative;transition:background .15s;}
+/* the Suggested column IS the list's suggestion tray, turned into a column:
+   same dashed accent shell, wash, and spark header */
+.bcol.k-suggested{border:1px dashed var(--accent);background:var(--accent-soft);padding:0 4px;}
+.bcol.k-suggested .bcol-h .cn{color:var(--accent-ink);display:flex;align-items:center;gap:6px;}
+[data-theme="dark"] .bcol.k-suggested .bcol-h .cn{color:#D98C6A;}
+.bcol.k-suggested .bcol-h .cn svg{width:11px;height:11px;}
+.bcol.k-suggested .bcol-rule{background:transparent;}
+.bcol-h{flex:0 0 auto;height:30px;display:flex;align-items:center;gap:8px;padding:0 6px;}
+.bcol-h .cn{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap;}
+.bcol-h .ct{font-family:var(--mono);font-size:9.5px;font-weight:700;color:var(--ink-4);background:var(--raise);border:1px solid var(--line-2);border-radius:999px;min-width:20px;text-align:center;padding:2px 5px;}
+.bcol-h .cn.needs-you{color:var(--blue);}
+.bcol-h .ct.needs-you{color:var(--blue);border-color:var(--blue-soft);}
+.bcol-h .sp{flex:1;}
+.bcol-h .derived{font-family:var(--mono);font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);border:1px solid var(--line);border-radius:4px;padding:2px 4px;}
+/* per-column status rule under the header — solid, in the same colors the
+   status dots use, so columns read as the list's groups turned sideways */
+.bcol-rule{flex:0 0 auto;height:2px;border-radius:2px;background:var(--line);margin:0 4px 9px;}
+.bcol.k-awaiting .bcol-rule{background:linear-gradient(90deg,var(--blue),var(--blue-soft));}
+.bcol.k-in_progress .bcol-rule{background:linear-gradient(90deg,var(--amber),var(--amber-soft));}
+.bcol.k-on_hold .bcol-rule{background:linear-gradient(90deg,#8b7fd6,transparent);}
+.bcol.k-done .bcol-rule{background:linear-gradient(90deg,var(--green),var(--green-soft));}
+.bcol-body{flex:1;min-height:60px;overflow-y:auto;padding:0 4px 18px;display:flex;flex-direction:column;gap:8px;}
+.b-slot{display:flex;flex-direction:column;gap:8px;flex:0 0 auto;}
+.bcol-empty{padding:16px 6px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--ink-4);text-transform:uppercase;letter-spacing:.06em;}
+
+/* drag states */
+.bcol.drag-over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent);}
+.bcol.drag-over .bcol-h .cn{color:var(--accent);}
+.bcol.reject .bcol-body{opacity:.38;}
+.bcol.reject::after{content:"";position:absolute;inset:40px 0 14px;border-radius:var(--r);background:repeating-linear-gradient(135deg,var(--coral-soft) 0 7px,transparent 7px 14px);box-shadow:inset 0 0 0 1px var(--coral-soft);pointer-events:none;opacity:.45;}
+.b-nodrop{position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:7px;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--coral);background:var(--raise);border:1px solid var(--coral);border-radius:var(--r);padding:11px 13px;text-align:center;width:186px;box-shadow:var(--sh-2);pointer-events:none;}
+.b-nodrop small{font-family:var(--sans);font-size:10.5px;letter-spacing:0;text-transform:none;color:var(--ink-3);font-weight:400;line-height:1.4;}
+.b-nodrop .x{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--coral);display:grid;place-items:center;}
+.b-nodrop .x svg{width:11px;height:11px;}
+.b-dropline{flex:0 0 auto;height:2px;border-radius:2px;background:var(--accent);box-shadow:var(--glow-blue);position:relative;margin:1px 2px;pointer-events:none;}
+.b-dropline::before,.b-dropline::after{content:"";position:absolute;top:-2.5px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
+.b-dropline::before{left:-3px;}
+.b-dropline::after{right:-3px;}
+.b-emptydrop{flex:1;border:1px dashed var(--accent);border-radius:var(--r-lg);background:var(--accent-soft);display:grid;place-items:center;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);min-height:110px;pointer-events:none;}
+
+/* card */
+.bcard{position:relative;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:10px 11px;box-shadow:var(--sh-1);flex:0 0 auto;cursor:pointer;transition:border-color .12s,background .12s,opacity .12s;}
+.bcard:hover{border-color:var(--line-strong);background:var(--raise);}
+.bcard.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),var(--sh-1);}
+.bc-top{display:flex;align-items:flex-start;gap:8px;}
+.bc-top .sdot{margin-top:4px;}
+.bc-title{flex:1;min-width:0;margin:0;font-size:12.5px;font-weight:550;line-height:1.35;letter-spacing:-.005em;color:var(--ink);}
+.bc-meta{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap;}
+.bc-act{font-family:var(--mono);font-size:9.5px;color:var(--ink-4);letter-spacing:.02em;display:flex;align-items:center;gap:5px;}
+.bc-act.on{color:var(--amber);}
+.bc-act.need{color:var(--blue);}
+/* indeterminate "working" scanner under a live card's meta row */
+.bc-bar{height:2px;border-radius:2px;background:var(--line-2);margin-top:9px;overflow:hidden;}
+.bc-bar i{display:block;height:100%;width:40%;border-radius:2px;background:linear-gradient(90deg,var(--amber),var(--blue));animation:bscan 2.2s ease-in-out infinite;}
+@keyframes bscan{0%{margin-left:-40%;}100%{margin-left:100%;}}
+.bc-foot{display:flex;align-items:center;gap:8px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line-2);}
+.bc-foot .sp{flex:1;}
+.bc-chip{font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:2.5px 6px;display:flex;align-items:center;gap:5px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.bc-chip.block{color:var(--amber);border-color:var(--amber);background:var(--amber-soft);}
+.bc-chip svg{width:10px;height:10px;flex:0 0 auto;}
+.bc-sess{font-family:var(--mono);font-size:9px;color:var(--ink-4);display:flex;align-items:center;gap:4px;}
+.bc-sess svg{width:10px;height:10px;}
+/* signal language: waiting card = blue rail + wash; working card = amber rail */
+.bcard.needs{background:linear-gradient(90deg,var(--blue-soft),transparent 55%),var(--surface);border-color:var(--blue);}
+.bcard.needs::before{content:"";position:absolute;left:-1px;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:var(--blue);box-shadow:var(--glow-blue);animation:brail 1.8s ease-in-out infinite;}
+@keyframes brail{0%,100%{opacity:1;}50%{opacity:.35;}}
+.bcard.working{border-color:var(--amber);}
+.bcard.working::before{content:"";position:absolute;left:-1px;top:8px;bottom:8px;width:2.5px;border-radius:3px;background:linear-gradient(180deg,var(--amber),var(--blue));opacity:.9;}
+/* suggested cards look like every other card (the column header carries the
+   "proposed by an agent" framing); they just add the quick-action row */
+.bsug-acts{display:flex;gap:6px;margin-top:9px;}
+.bsug-acts button{flex:1;font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:5px 0;border-radius:5px;border:1px solid var(--line);background:transparent;color:var(--ink-3);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;}
+.bsug-acts button:hover{color:var(--ink);border-color:var(--line-strong);}
+.bsug-acts button.go{background:var(--blue-soft);border-color:var(--blue);color:var(--blue);}
+.bsug-acts button.no{flex:0 0 30px;color:var(--ink-4);}
+.bsug-acts button svg{width:10px;height:10px;}
+/* terminal columns: compact rows, day dividers, veil past the cap */
+.bcard.mini{padding:8px 10px;}
+.bcard.mini .bc-top{align-items:center;}
+.bcard.mini .bc-top .sdot{margin-top:0;}
+.bcard.mini .bc-title{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bcard.mini .bc-meta{margin-top:5px;}
+.b-day{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);display:flex;align-items:center;gap:7px;padding:3px 2px;}
+.b-day i{flex:1;height:1px;background:var(--line-2);}
+.b-showall{margin:2px 2px 0;border:1px dashed var(--line);border-radius:var(--r);padding:9px;text-align:center;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);cursor:pointer;flex:0 0 auto;}
+.b-showall:hover{color:var(--ink);border-color:var(--line-strong);}
+.bcard.dragging{opacity:.45;border-style:dashed;}
+/* board-mode loading skeleton */
+.board-loading .skel{height:10px;}
+
+/* slide-over session panel (click a card → session over a dimmed board) */
+.bpanel-scrim{position:absolute;inset:0;background:rgba(4,6,10,.45);z-index:5;}
+.bpanel{position:absolute;top:0;right:0;bottom:0;width:min(900px,88%);z-index:6;background:var(--surface);border-left:1px solid var(--line-strong);box-shadow:var(--sh-3);display:flex;flex-direction:column;animation:bslide .18s ease-out;}
+@keyframes bslide{from{transform:translateX(26px);opacity:.4;}to{transform:none;opacity:1;}}
+.bpanel-bar{flex:0 0 auto;height:36px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--line);background:var(--panel);}
+.bpanel-bar .bp-hint{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);}
+.bpanel-bar .spacer{flex:1;}
+.bpanel .session-body{flex:1;min-height:0;display:flex;}
+.app.mobile .bcol{flex:0 0 min(78vw,260px);}
 /* toolbar pill — the cross-project count */
 .needs-you-pill{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 11px;border-radius:999px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;font-weight:500;color:var(--coral);background:var(--coral-soft);border:1px solid var(--coral-soft);cursor:pointer;transition:filter .12s;}
 .needs-you-pill:hover{filter:brightness(1.12);}

@@ -217,9 +217,7 @@ export function listTasks(projectId: string): TaskWithUsage[] {
                    FROM task_usage u WHERE u.task_id = t.id
                    ORDER BY u.created_at DESC, u.rowid DESC LIMIT 1), 0) AS context_tokens
        FROM tasks t WHERE t.project_id = ?
-       ORDER BY t.suggested ASC,
-         CASE t.priority WHEN 'hi' THEN 0 WHEN 'med' THEN 1 ELSE 2 END,
-         t.created_at ASC`
+       ORDER BY t.suggested ASC, t.position ASC, t.created_at ASC`
     )
     .all(projectId) as (Task & { cost_usd: number; total_tokens: number; context_tokens: number })[];
   // Attach each task's dependency edges in one query (project-scoped via join).
@@ -306,13 +304,29 @@ export function createTask(input: {
   // Which agent driver the task runs under: explicit choice, else the owning
   // project's default (see lib/agents/registry.ts for resolution).
   const agent = input.agent || getProject(input.project_id)?.default_agent || "claude";
+  // New tasks land at the end of the project's manual order.
+  const position = (
+    getDb().prepare("SELECT COALESCE(MAX(position), -1) + 1 AS n FROM tasks WHERE project_id = ?").get(input.project_id) as { n: number }
+  ).n;
   getDb()
     .prepare(
-      `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, agent, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?)`
+      `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, agent, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?)`
     )
-    .run(id, input.project_id, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, now, now);
+    .run(id, input.project_id, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, position, now, now);
   return getTask(id)!;
+}
+
+// Persist a manual task ordering (board drag / drop). `ids` is the desired
+// order — each task's position is set to its index. The client sends the
+// project's full task list flattened in column order; only relative order
+// within a status group is ever rendered, so cross-group interleaving is fine.
+export function reorderTasks(ids: string[]) {
+  const db = getDb();
+  const stmt = db.prepare("UPDATE tasks SET position = ? WHERE id = ?");
+  db.transaction(() => {
+    ids.forEach((id, i) => stmt.run(i, id));
+  })();
 }
 
 export function updateTask(id: string, patch: Partial<Task>): Task | undefined {

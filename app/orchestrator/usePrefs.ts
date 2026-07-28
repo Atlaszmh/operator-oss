@@ -5,7 +5,7 @@ import { LS, loadPersist } from "./persist";
 import { reconcileHistory, closeOneLevel, type NavSel } from "./navHistory";
 import {
   DEFAULT_APPEARANCE, DEFAULT_SETTINGS, DEFAULT_LAYOUT,
-  type Appearance, type Settings, type Layout, type View,
+  type Appearance, type Settings, type Layout, type View, type TaskView,
 } from "./types";
 
 // Mirror of Orchestrator's mobile breakpoint — the Back-button trap only arms on
@@ -27,6 +27,7 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
   setSelTask: (id: string | null) => void;
 }) {
   const [view, setView] = useState<View>("workspace");
+  const [taskView, setTaskView] = useState<TaskView>("list");
   const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [layout, setLayout] = useState<Layout>(DEFAULT_LAYOUT);
@@ -43,6 +44,7 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
     if (p.appearance) setAppearance({ ...DEFAULT_APPEARANCE, ...p.appearance });
     if (p.settings) setSettings({ ...DEFAULT_SETTINGS, ...p.settings });
     if (p.layout) setLayout({ ...DEFAULT_LAYOUT, ...p.layout });
+    if (p.taskView === "board") setTaskView("board");
     const urlView = urlSelRef.current?.view;
     if (urlView === "settings" || urlView === "insights") setView(urlView);
     setHydrated(true);
@@ -53,14 +55,14 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
     if (!hydrated) return;
     document.documentElement.setAttribute("data-theme", appearance.theme);
     document.documentElement.style.setProperty("--density", appearance.density);
-    localStorage.setItem(LS, JSON.stringify({ selProj, selTask, appearance, settings, layout }));
+    localStorage.setItem(LS, JSON.stringify({ selProj, selTask, appearance, settings, layout, taskView }));
 
     // Mirror the open project/task + active view into the URL (refresh-restore)
     // and, on mobile, keep a single Back-trap entry on top while a pane is open
     // so the device Back button steps session → tasks → projects. (See navHistory.)
     const armTrap = window.matchMedia(MOBILE_QUERY).matches;
     reconcileHistory(window.history, window.location.pathname, { proj: selProj, task: selTask, view }, armTrap);
-  }, [appearance, settings, layout, selProj, selTask, view, hydrated]);
+  }, [appearance, settings, layout, taskView, selProj, selTask, view, hydrated]);
 
   // Back button: consume the trap and close exactly one pane level. The setState
   // calls re-run the persist effect, which re-arms the trap if a pane is still
@@ -81,5 +83,5 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
   const setAppearanceKey = (k: keyof Appearance, v: string) => setAppearance((a) => ({ ...a, [k]: v }));
   const setSetting = <K extends keyof Settings>(k: K, v: Settings[K]) => setSettings((s) => ({ ...s, [k]: v }));
 
-  return { view, setView, appearance, setAppearance: setAppearanceKey, settings, setSetting, setSettings, layout, setLayout, hydrated };
+  return { view, setView, taskView, setTaskView, appearance, setAppearance: setAppearanceKey, settings, setSetting, setSettings, layout, setLayout, hydrated };
 }
