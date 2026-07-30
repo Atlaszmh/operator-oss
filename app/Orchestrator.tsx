@@ -18,7 +18,7 @@ import { ServicesDrawer } from "./orchestrator/Services";
 import { clientFeatures } from "@/lib/features";
 import { NewTaskModal, EditTaskModal, ContextModal, NewProjectModal, SessionsModal } from "./orchestrator/modals";
 import { OnboardingWizard } from "./orchestrator/OnboardingWizard";
-import { AgentNudge } from "./orchestrator/AgentConnect";
+import { AgentNudge, AgentAuthBanner } from "./orchestrator/AgentConnect";
 import { WelcomeCoach, WelcomeNudge } from "./orchestrator/Welcome";
 import { NeedsYouMenu } from "./orchestrator/NeedsYouMenu";
 import { CommandPalette, type PaletteCommand } from "./orchestrator/CommandPalette";
@@ -216,6 +216,7 @@ export default function Orchestrator() {
             onStart={() => o.runTurn(task.id, "", true)}
             onStop={() => o.stopTurn(task.id)}
             onClear={() => o.clearSession(task.id)} onEdit={() => o.setEditId(task.id)}
+            onReconnect={() => openSettings("agents")}
             onSetStatus={o.setStatus} onSetPriority={o.setPriority} onSetModel={o.setModel}
             onSetReasoning={o.setReasoning} onSetPermission={o.setPermission}
             onResolveWithAI={o.resolveConflictsWithAI}
@@ -301,6 +302,7 @@ export default function Orchestrator() {
                 onStart={() => o.runTurn(task.id, "", true)}
                 onStop={() => o.stopTurn(task.id)}
                 onClear={() => o.clearSession(task.id)} onEdit={() => o.setEditId(task.id)}
+                onReconnect={() => openSettings("agents")}
                 onSetStatus={o.setStatus} onSetPriority={o.setPriority} onSetModel={o.setModel}
                 onSetReasoning={o.setReasoning} onSetPermission={o.setPermission}
                 onResolveWithAI={o.resolveConflictsWithAI}
@@ -457,6 +459,11 @@ export default function Orchestrator() {
           </div>
         </div>
       </div>
+
+      {/* An agent's login died — nothing can run until it's reconnected, and that
+          is true for every project, so it lives above the whole workspace rather
+          than inside the task that happened to hit it first. */}
+      <AgentAuthBanner broken={o.brokenAgents} onReconnect={() => openSettings("agents")} />
 
       <div className={`body${isMobile ? " mobile" : ""}`}>
         {o.bootError ? (
