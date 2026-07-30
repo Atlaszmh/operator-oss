@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { listDrivers, DEFAULT_AGENT } from "@/lib/agents/registry";
 import { getSetting } from "@/lib/store";
-import { getAgentConnection } from "@/lib/agents/connections";
+import { getAgentConnection, getAgentAuthBroken } from "@/lib/agents/connections";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,12 @@ export async function GET() {
         connected: !!conn,
         authenticated: !!conn,
         account: conn ? { email: conn.email, plan: conn.plan, method: conn.method } : null,
+        // Connected on record, but its credentials died in flight (expired OAuth
+        // session, revoked key) — set by the runner when a turn fails on auth
+        // (lib/authFailure.ts) and cleared by the next successful turn or
+        // reconnect. Drives the titlebar reconnect banner; a tab that missed the
+        // live event picks it up here on load / SSE reconnect.
+        authBroken: getAgentAuthBroken(d.id),
       };
     }),
   });

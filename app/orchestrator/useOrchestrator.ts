@@ -131,6 +131,22 @@ export function useOrchestrator() {
     try { const { ids } = await jget<{ ids: string[] }>("/api/running"); setRunning(new Set(ids)); } catch {}
   }, []);
 
+  // Load the agent capability bundle (drives every run-control picker AND the
+  // per-agent connected/authenticated/authBroken status). Re-runnable: any in-app
+  // connect (wizard finish, Settings → Agents) calls this so the shared bundle —
+  // and thus the New-task dialog's "· not connected" flag and the reconnect
+  // banner — updates live, no reload. Declared above the event streams because
+  // useGlobalEvents calls it when an agent's login dies or recovers.
+  const refreshAgents = useCallback(
+    () => jget<AgentsBundle>("/api/agents").then(setAgents).catch(() => {}),
+    []
+  );
+  useEffect(() => { void refreshAgents(); }, [refreshAgents]);
+
+  // Agents that are connected on record but whose credentials just stopped
+  // working — the titlebar reconnect banner's input. Normally empty.
+  const brokenAgents = useMemo(() => agents.agents.filter((a) => !!a.authBroken), [agents]);
+
   // ---------- live task event stream + transcript state ----------
   const { msgsByTask, appendMsg, setAnswerOnMsg } = useTaskStream({
     selTask, selProjRef, agentsRef, setTaskRunning, setTasks, setProjects, loadTasks,
@@ -138,7 +154,7 @@ export function useOrchestrator() {
   // Always-open global lifecycle stream (GET /api/events): keeps spinners,
   // project badges, and the "N need you" pill live for tasks whose transcript
   // stream ISN'T open — only the selected task has one.
-  useGlobalEvents({ selProjRef, setTaskRunning, setTasks, setProjects, loadTasks, reconcileRunning });
+  useGlobalEvents({ selProjRef, setTaskRunning, setTasks, setProjects, loadTasks, reconcileRunning, refreshAgents });
   const messages = selTask ? msgsByTask[selTask] ?? [] : [];
   // No entry yet for the selected task = its SSE snapshot hasn't arrived — the
   // session view shows a transcript skeleton instead of an empty chat flash.
@@ -157,16 +173,6 @@ export function useOrchestrator() {
   useEffect(() => {
     jget<Record<string, string>>("/api/settings").then(setAppDefaults).catch(() => {});
   }, []);
-
-  // Load the agent capability bundle (drives every run-control picker AND the
-  // per-agent connected/authenticated status). Re-runnable: any in-app connect
-  // (wizard finish, Settings → Agents) calls this so the shared bundle — and
-  // thus the New-task dialog's "· not connected" flag — updates live, no reload.
-  const refreshAgents = useCallback(
-    () => jget<AgentsBundle>("/api/agents").then(setAgents).catch(() => {}),
-    []
-  );
-  useEffect(() => { void refreshAgents(); }, [refreshAgents]);
 
   // Onboarding: a fresh instance opens the wizard automatically; an already
   // set-up one (onboarding_complete) never sees it unless re-run from Settings.
@@ -559,7 +565,7 @@ export function useOrchestrator() {
     blockedBy, liveAwaiting, needsYouTotal,
     modal, setModal, editId, setEditId, view, setView, taskView, setTaskView,
     appearance, setAppearance, appearanceOpen, setAppearanceOpen,
-    settings, setSetting, appDefaults, setAppDefault, agents, refreshAgents,
+    settings, setSetting, appDefaults, setAppDefault, agents, refreshAgents, brokenAgents,
     onboarding, wizardOpen, finishWizard, rerunOnboarding, nudge, setNudge, onMerged, onPrCreated,
     layout, setLayout, accessEmail, recaps,
     termOpen, setTermOpen, termMounted, setTermMounted, termHeight, setTermHeight,

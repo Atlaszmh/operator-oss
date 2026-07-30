@@ -1,7 +1,7 @@
 import { getTask, countAwaiting } from "@/lib/store";
 import { subscribeGlobal } from "@/lib/events";
 import { sseOpened, sseClosed } from "@/lib/idle";
-import type { GlobalTaskEvent, TaskStreamEvent } from "@/lib/types";
+import type { GlobalEvent, GlobalTaskEvent, TaskStreamEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -53,7 +53,22 @@ export async function GET(req: Request) {
   let cleanup = () => {};
   const stream = new ReadableStream({
     start(controller) {
+      const send = (payload: GlobalEvent) => {
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        } catch {
+          cleanup();
+        }
+      };
       const unsub = subscribeGlobal((taskId, ev) => {
+        // An agent's login died (or started working again). Task-keyed on the bus
+        // because that's where it was detected, but instance-wide in meaning —
+        // one login per agent, shared by every task — so it relays verbatim and
+        // every tab raises/drops the reconnect banner at once.
+        if (ev.type === "agent_auth") {
+          send({ type: "agent_auth", agent: ev.agent, broken: ev.broken, reason: ev.reason });
+          return;
+        }
         const event = coarse(ev);
         if (!event) return;
         // Task deleted mid-turn (rows are hard-deleted) — nothing to report.
@@ -69,11 +84,7 @@ export async function GET(req: Request) {
           status: t.status,
           awaiting_count: countAwaiting(t.project_id),
         };
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
-        } catch {
-          cleanup();
-        }
+        send(payload);
       });
       // Keep-alive comment so proxies don't reap quiet streams, and so a dead
       // client is detected (enqueue throws) even when nothing is running.

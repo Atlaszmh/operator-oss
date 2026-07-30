@@ -185,6 +185,16 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .tb-icon.on{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft);}
 .tb-avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--on-accent);flex:0 0 auto;}
 
+/* Instance-wide "an agent's login expired" strip, between the titlebar and the
+   workspace. Not dismissible on purpose: no session can run until it's fixed. */
+.auth-banner{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:9px 16px;font-size:12.5px;color:var(--red);background:var(--red-soft);border-bottom:1px solid var(--red);z-index:29;}
+.auth-banner .ab-ic{display:grid;place-items:center;flex:0 0 auto;}
+.auth-banner .ab-msg{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.auth-banner .ab-msg b{font-weight:700;}
+.auth-banner .ab-why{margin-left:8px;font-family:var(--mono);font-size:11px;opacity:.75;}
+.auth-banner .ab-spacer{flex:1;}
+.auth-banner .btn{flex:0 0 auto;}
+
 .body{flex:1;display:flex;min-height:0;}
 
 /* ============================== columns ============================== */
@@ -906,7 +916,10 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 [data-theme="dark"] .hljs-attr,[data-theme="dark"] .hljs-variable{color:#E0A07F;}
 
 /* system / error notice */
-.msg.system .msg-body{font-family:var(--mono);font-size:12px;color:#A23E2A;background:var(--red-soft);border:1px solid rgba(192,80,60,.3);border-radius:var(--r);padding:9px 12px;}
+/* pre-line: provider error text carries its own line breaks (and the recovery
+   notices are appended after a blank line) — collapsing them ran the raw error
+   and the explanation together as one paragraph. */
+.msg.system .msg-body{font-family:var(--mono);font-size:12px;color:#A23E2A;background:var(--red-soft);border:1px solid rgba(192,80,60,.3);border-radius:var(--r);padding:9px 12px;white-space:pre-line;}
 [data-theme="dark"] .msg.system .msg-body{color:#E08F78;}
 .msg.system.info .msg-body{color:var(--green);background:var(--green-soft);border-color:rgba(110,150,90,.3);}
 [data-theme="dark"] .msg.system.info .msg-body{color:var(--green);}
@@ -1342,6 +1355,11 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 .wiz-ok{flex:0 0 28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--green,#5C8C5A);}
 .wiz-ok svg{width:16px;height:16px;}
 .wiz-ok-t{font-size:14px;font-weight:600;color:var(--ink);}
+/* connected-but-broken: same layout as .wiz-connected, warning voice */
+.wiz-warn{flex:0 0 28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--red-soft);color:var(--red);}
+.wiz-warn svg{width:16px;height:16px;}
+.wiz-connected.broken .wiz-ok-t{color:var(--red);}
+.wiz-connected.broken .hlp{font-family:var(--mono);font-size:11px;}
 .wiz-fail{display:flex;align-items:flex-start;gap:12px;}
 .wiz-failic{flex:0 0 28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--red-soft);color:var(--red);}
 .wiz-failic svg{width:16px;height:16px;}

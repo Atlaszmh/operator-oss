@@ -167,7 +167,11 @@ export type AgentInfoT = {
   capabilities: AgentCapabilitiesT;
   connected: boolean;
   account: { email: string | null; plan: string | null; method: "subscription" | "api_key" } | null;
+  authBroken?: AgentAuthBrokenT | null;
 };
+// Connected, but its login stopped working mid-flight (see lib/authFailure.ts).
+// `reason` is the provider's own error text; `at` is when it was first seen.
+export type AgentAuthBrokenT = { at: number; reason: string };
 export type AgentsResponseT = { default: string; agents: AgentInfoT[] };
 export type AgentLoginT = ClaudeLoginT & { code?: string | null };
 
@@ -197,7 +201,7 @@ export interface AgentCapabilities {
   costIsEstimated: boolean;   // cost is estimated from tokens × API prices — show with ~
   supportsResume: boolean;    // turns can resume a prior session/thread id
 }
-export interface AgentInfo { id: string; label: string; capabilities: AgentCapabilities; authenticated: boolean }
+export interface AgentInfo { id: string; label: string; capabilities: AgentCapabilities; authenticated: boolean; authBroken?: AgentAuthBrokenT | null }
 export interface AgentsBundle { default: string; agents: AgentInfo[] }
 export const EMPTY_AGENTS: AgentsBundle = { default: "claude", agents: [] };
 
