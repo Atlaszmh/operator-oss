@@ -185,7 +185,7 @@ export const PRIORITIES: Priority[] = ["hi", "med", "lo"];
 // capability descriptor (models / reasoning / permission modes it supports, plus
 // feature flags) served by GET /api/agents. The client renders every picker from
 // this data, so a task's controls always match the agent it runs under.
-export interface AgentModelOption { value: string; label: string; sub: string; contextWindow: number }
+export interface AgentModelOption { value: string; label: string; sub: string; contextWindow: number; group?: string }
 export interface AgentPickerOption { value: string; label: string; sub: string }
 export interface AgentCapabilities {
   models: AgentModelOption[];
@@ -204,9 +204,9 @@ export const EMPTY_AGENTS: AgentsBundle = { default: "claude", agents: [] };
 // A picker option list. `value: null` is the synthetic "Default" head — it
 // persists as null in tasks.model/reasoning/permission_mode, inheriting the
 // app-level (agent-scoped) default, then the driver's built-in.
-export type PickerOption = { value: string | null; label: string; sub: string };
+export type PickerOption = { value: string | null; label: string; sub: string; group?: string };
 const DEFAULT_HEAD: PickerOption = { value: null, label: "Default", sub: "inherit the agent's default" };
-const withDefault = (opts: { value: string; label: string; sub: string }[]): PickerOption[] => [DEFAULT_HEAD, ...opts];
+const withDefault = (opts: PickerOption[]): PickerOption[] => [DEFAULT_HEAD, ...opts];
 // Build each picker's option list from a driver's capabilities. Undefined caps
 // (agent metadata not loaded yet) yields just the Default head.
 export const modelOptions = (caps?: AgentCapabilities): PickerOption[] => withDefault(caps?.models ?? []);
