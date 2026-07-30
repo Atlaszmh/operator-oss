@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Status, Priority, ToolData, AskQuestion, AskAnswers } from "@/lib/types";
 import { Icon } from "../icons";
 import TaskChanges, { type ResolveResult } from "../TaskChanges";
@@ -313,11 +313,16 @@ export function SessionView({ project, task, agents, messages, running, blockedB
               </button>
               {modelOpen && (
                 <Popover onClose={() => setModelOpen(false)}>
-                  {models.map((m) => (
-                    <div key={m.label} className="pop-item" onClick={() => { onSetModel(m.value); setModelOpen(false); }}>
-                      <div><div>{m.label}</div><div className="pi-sub">{m.sub}</div></div>
-                      {(task.model ?? null) === m.value && <span className="pi-check">{Icon.check()}</span>}
-                    </div>
+                  {models.map((m, i) => (
+                    <Fragment key={m.label}>
+                      {/* Section header whenever the group changes — Claude Code's
+                          list runs to a dozen-plus pins, so it needs the structure. */}
+                      {m.group && m.group !== models[i - 1]?.group && <div className="pop-sec">{m.group}</div>}
+                      <div className="pop-item" onClick={() => { onSetModel(m.value); setModelOpen(false); }}>
+                        <div><div>{m.label}</div><div className="pi-sub">{m.sub}</div></div>
+                        {(task.model ?? null) === m.value && <span className="pi-check">{Icon.check()}</span>}
+                      </div>
+                    </Fragment>
                   ))}
                 </Popover>
               )}

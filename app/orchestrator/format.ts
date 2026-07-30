@@ -45,19 +45,31 @@ export function contextPct(tokens: number, model: string | null | undefined, cap
   return Math.round((tokens / contextWindowOf(model, caps)) * 1000) / 10;
 }
 
-// Friendly name for a resolved model id. First tries the agent's capability
-// models — the id contains one of their values (e.g. "gpt-5.1-codex-max") — and
-// uses that option's label. Falls back to the Claude family/version regex
-// ("claude-opus-4-8-20251101" -> "Opus 4.8"), then the raw id.
+// Friendly name for a resolved model id — the badge that answers "which model
+// did this turn actually run on?". The VERSION is the point: family aliases move
+// (today "opus" resolves to claude-opus-5, last month claude-opus-4-8), so a bare
+// "Opus" badge tells you nothing. Parse family + version out of the id first
+// ("claude-opus-5" -> "Opus 5", "claude-opus-4-8-20251101" -> "Opus 4.8") and
+// keep the `[1m]` marker, since the 1M variant is a distinct run mode.
+// Non-Claude ids (Codex's "gpt-5.1-codex-max") carry no such version shape —
+// those fall through to the agent's capability labels, matched longest-first so
+// a shorter value can't shadow a more specific one. Raw id is the last resort.
 export function modelLabel(id: string | null, caps?: AgentCapabilities): string {
   if (!id) return "";
   const s = id.toLowerCase();
-  const hit = (caps?.models ?? []).find((m) => s.includes(m.value.toLowerCase()));
-  if (hit) return hit.label;
-  const fam = s.includes("fable") ? "Fable" : s.includes("opus") ? "Opus" : s.includes("sonnet") ? "Sonnet" : s.includes("haiku") ? "Haiku" : null;
-  if (!fam) return id;
-  const m = s.match(/(?:fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?/);
-  return m ? `${fam} ${m[1]}${m[2] ? `.${m[2]}` : ""}` : fam;
+  const long = s.includes("[1m]") ? " (1M)" : "";
+  const fam = ["fable", "opus", "sonnet", "haiku"].find((f) => s.includes(f));
+  if (fam) {
+    const cap = fam[0].toUpperCase() + fam.slice(1);
+    const v = s.match(new RegExp(`${fam}-(\\d+)(?:-(\\d+))?`));
+    // Deliberately NOT the capability label here: an id we can't read a version
+    // out of shouldn't be badged with a version we're only guessing at.
+    return v ? `${cap} ${v[1]}${v[2] ? `.${v[2]}` : ""}${long}` : `${cap}${long}`;
+  }
+  const hit = (caps?.models ?? [])
+    .filter((o) => s.includes(o.value.toLowerCase()))
+    .sort((a, b) => b.value.length - a.value.length)[0];
+  return hit ? hit.label : id;
 }
 
 // Phrase AskUserQuestion answers as a reply, for the reload fallback where the
