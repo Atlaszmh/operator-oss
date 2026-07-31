@@ -227,5 +227,16 @@ Promise.all([app.prepare(), cfAccessImport, serviceRouterImport]).then(([, cfAcc
       `[server] orchestrator ready on http://${hostname}:${port} ` +
         `(${dev ? "dev" : "production"}); /pty -> ws://${ptyHost}:${ptyPort}; ${auth}`,
     );
+    if (dev) {
+      // One-time heads-up: dev mode compiles each route on first hit (Turbopack +
+      // React dev build) and is MUCH slower than the production build. Users who
+      // just want to USE the app should not be running it this way.
+      console.warn(
+        "[server] ============================================================\n" +
+          "[server]  DEV MODE — routes compile on demand; everything is slower.\n" +
+          "[server]  For actually using the app, run:  npm run build && npm start\n" +
+          "[server] ============================================================",
+      );
+    }
   });
 });

@@ -100,9 +100,15 @@ Managed services are on by default; `ORCH_FEATURE_SERVICES=0` turns the whole fe
 
 ```bash
 npm install
-npm run dev
+npm run build
+npm start
 # open http://localhost:3000
 ```
+
+This is the production build — use it whenever you're actually *using* the app.
+Hacking on Operator itself? `npm run dev` runs the dev server (Turbopack + React dev
+build) with hot reload — but it compiles each route on first hit and is **much slower**,
+so don't run it for day-to-day use.
 
 You need **Node 18.18+**, **macOS or Linux**, and at least one agent CLI: **Claude Code**
 (`npm i -g @anthropic-ai/claude-code`, Pro/Max plan — recommended) or **Codex**
