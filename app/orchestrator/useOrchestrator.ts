@@ -242,6 +242,23 @@ export function useOrchestrator() {
   // decision (recap vs. first task) is made in useRecaps once recap status is known.
   useEffect(() => { if (selProj) loadTasks(selProj, false); }, [selProj, loadTasks]);
 
+  // A hidden tab gets throttled and its SSE streams may quietly die, so the
+  // project badges / "needs you" counts drift while you're away. On the
+  // hidden→visible transition, refetch the project list once — skipping brief
+  // tab flips (the stream never missed a beat) so rapid alt-tabbing doesn't
+  // spam the endpoint.
+  useEffect(() => {
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+      if (!hiddenAt || Date.now() - hiddenAt < 5_000) return;
+      hiddenAt = 0;
+      jget<ProjectRow[]>("/api/projects").then(setProjects).catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   // Browser notification when a task newly needs you — the payoff for the
   // permission asked for during onboarding. Fires on the awaiting transition
   // (a turn ending mid-task OR Claude parking on a question), for any task in
@@ -402,10 +419,21 @@ export function useOrchestrator() {
     runTurn(taskId, "", true);
   }, [tasks, running, runTurn, appendMsg]);
 
+  // Cheap local patch: a mutation just took a task out of the "needs you" set,
+  // so drop it from its project's badge now rather than waiting for the SSE
+  // roundtrip (the published lifecycle event re-syncs the exact count moments
+  // later; the selected project's pill reads liveAwaiting, so this only matters
+  // once you navigate away).
+  const decAwaiting = (t: TaskRow) =>
+    setProjects((prev) => prev.map((p) => (p.id === t.project_id ? { ...p, awaiting_count: Math.max(0, p.awaiting_count - 1) } : p)));
+
   const setStatus = async (s: Status) => {
     if (!task) return;
+    const wasAwaiting = isAwaiting(task);
     const fresh = await jsend<TaskRow>(`/api/tasks/${task.id}`, "PATCH", { status: s });
     setTasks((prev) => prev.map((x) => (x.id === task.id ? { ...x, ...fresh } : x)));
+    // The server clears awaiting_input on a manual status change.
+    if (wasAwaiting) decAwaiting(task);
   };
   const setPriority = async (p: Priority) => {
     if (!task) return;
@@ -475,8 +503,12 @@ export function useOrchestrator() {
   // Hard-deletes the task (and its worktree/branch server-side), closes the edit
   // modal, and drops it from the selection if it was the one being viewed.
   const removeTask = async (id: string) => {
+    const t = tasks.find((x) => x.id === id);
     await jsend(`/api/tasks/${id}`, "DELETE");
     setTasks((prev) => prev.filter((x) => x.id !== id));
+    // A deleted task can no longer need you — the task_deleted event confirms
+    // with the server-recomputed count moments later.
+    if (t && isAwaiting(t)) decAwaiting(t);
     setEditId(null);
     setSelTask((cur) => (cur === id ? null : cur));
   };
