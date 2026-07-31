@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+
+# Per-machine compose overrides (runtime, host toolchain paths). Local only —
+# never part of a PR upstream.
+docker-compose.override.yml
 !.env.example
 
 # vercel

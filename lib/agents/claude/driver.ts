@@ -11,7 +11,7 @@ import { z } from "zod";
 import type { Project, Task, StreamEvent, AskQuestion } from "../../types";
 import type { AgentDriver } from "../types";
 import { CLAUDE_CAPABILITIES } from "./capabilities";
-import { getSetting } from "../../store";
+import { getSetting, setSetting, recordRateLimit, type RateLimitSnapshot } from "../../store";
 import { createSuggestedTask, registerExposedService, resolveTitleRefs } from "../../agentTools";
 import { SUGGEST_TASK, EXPOSE_SERVICE } from "../../agentToolDefs.mjs";
 import { waitForAnswer } from "../../asks";
@@ -265,6 +265,13 @@ async function* runTurn(
               }
             }
           }
+        } else if (message.type === "rate_limit_event") {
+          // Subscription rate-limit state (5-hour / weekly windows). Account-wide
+          // rather than per-task, so it lands in settings instead of the task's
+          // usage row. Each event carries whichever window is binding right now,
+          // so recordRateLimit keeps one snapshot per window for Insights.
+          const info = (message as { rate_limit_info?: RateLimitSnapshot }).rate_limit_info;
+          if (info) recordRateLimit(info);
         } else if (message.type === "result") {
           // Per-turn spend: the result message carries this turn's dollar cost
           // and token counts. Persisted by the consumer for cumulative totals.

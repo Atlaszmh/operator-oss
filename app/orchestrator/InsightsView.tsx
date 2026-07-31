@@ -20,6 +20,31 @@ interface Payload {
   shipped: { d: string; p: string; a: string; n: number }[];
   merges: { d: string; p: string; a: string; add: number; del: number }[];
   models: { a: string; m: string }[];
+  limits: UsageWindow[];
+  rateLimits: Record<string, RateLimit>;
+}
+
+// Mirrors UsageWindow in lib/claude-usage.ts — one row of Claude's own /usage
+// panel, label taken verbatim from the CLI.
+interface UsageWindow {
+  label: string;
+  pct: number;
+  resetsAt: number | null;
+  resetsText: string;
+}
+
+// Newest subscription snapshot per window, keyed by window type (see
+// getRateLimits in lib/store.ts). Mirrors the SDK's SDKRateLimitInfo plus `at`
+// (when we recorded it). Every field but `status` is optional — `utilization`
+// in particular only arrives once the API reports it, so a row must render
+// without it.
+interface RateLimit {
+  status: "allowed" | "allowed_warning" | "rejected";
+  resetsAt?: number;
+  rateLimitType?: string;
+  utilization?: number;
+  isUsingOverage?: boolean;
+  at?: number;
 }
 
 type Range = "7d" | "30d" | "90d";
@@ -250,6 +275,100 @@ function ChartCard({ title, sub, right, children }: { title: string; sub: string
   );
 }
 
+// Subscription limits, as reported by Claude itself — distinct from every other
+// number here, which is Operator's own token accounting. Rows come from Claude's
+// /usage panel (lib/claude-usage.ts) so this reads exactly like the account
+// panel it mirrors; the SDK's rate-limit snapshots supply the status chip, and
+// stand in as rows if the CLI read didn't land.
+const RL_WINDOW: Record<string, string> = {
+  five_hour: "Current session",
+  seven_day: "Current week (all models)",
+  seven_day_opus: "Current week (Opus)",
+  seven_day_sonnet: "Current week (Sonnet)",
+  overage: "Overage",
+};
+const RL_ORDER = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "overage"];
+
+// Largest unit only past a day ("in 5d"), h+m below it — floor throughout so
+// 2h59.7m never rounds up into "2h 60m".
+function fmtReset(ms: number): string {
+  const left = ms - Date.now();
+  if (left <= 0) return "now";
+  const d = Math.floor(left / 86_400_000);
+  if (d >= 1) return `in ${d}d`;
+  const h = Math.floor(left / 3_600_000);
+  const m = Math.floor((left % 3_600_000) / 60_000);
+  return h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+}
+
+interface LimitRow { key: string; label: string; pct: number | null; resets: string | null }
+
+function RateRow({ row }: { row: LimitRow }) {
+  const { pct } = row;
+  const tone = pct === null ? "var(--ink-3)" : pct >= 95 ? "var(--red)" : pct >= 80 ? "var(--amber)" : "var(--blue)";
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 12.5, color: "var(--ink)" }}>{row.label}</span>
+        <span className="mono" style={{ fontSize: 12.5, color: pct === null ? "var(--ink-4)" : "var(--ink)" }}>
+          {pct === null ? "—" : `${pct}%`}
+        </span>
+      </div>
+      <div style={{ height: 6, borderRadius: 3, background: "var(--grid)", overflow: "hidden", margin: "7px 0 5px" }}>
+        <div style={{ width: `${pct ?? 0}%`, height: "100%", background: tone, borderRadius: 3 }} />
+      </div>
+      <div className="in-card-s" style={{ marginTop: 0 }}>{row.resets ? `Resets ${row.resets}` : "No reset time reported"}</div>
+    </div>
+  );
+}
+
+function SubscriptionCard({ limits, windows }: { limits: UsageWindow[]; windows: Record<string, RateLimit> }) {
+  // Known windows in Claude's order, then anything the SDK adds later.
+  const keys = [...RL_ORDER.filter((k) => windows[k]), ...Object.keys(windows).filter((k) => !RL_ORDER.includes(k))];
+  const rows: LimitRow[] = limits.length
+    ? limits.map((l) => ({
+        key: l.label,
+        label: l.label,
+        pct: Math.max(0, Math.min(100, l.pct)),
+        resets: l.resetsAt ? fmtReset(l.resetsAt) : l.resetsText,
+      }))
+    : keys.map((k) => ({
+        key: k,
+        label: RL_WINDOW[k] ?? k,
+        pct: typeof windows[k].utilization === "number" ? Math.max(0, Math.min(100, Math.round(windows[k].utilization!))) : null,
+        resets: windows[k].resetsAt ? fmtReset(windows[k].resetsAt! * 1000) : null, // SDK reports unix seconds
+      }));
+
+  const statuses = keys.map((k) => windows[k].status);
+  const worst = statuses.includes("rejected") ? "rejected" : statuses.includes("allowed_warning") ? "allowed_warning" : "allowed";
+  const tone = worst === "rejected" ? "var(--red)" : worst === "allowed_warning" ? "var(--amber)" : "var(--green)";
+  const statusText = worst === "rejected" ? "Limit reached" : worst === "allowed_warning" ? "Approaching limit" : "Within limits";
+  const overage = keys.some((k) => windows[k].isUsingOverage);
+  // Only the fallback rows can be stale; the /usage read is at most 5 min old.
+  const at = limits.length ? 0 : Math.max(0, ...keys.map((k) => windows[k].at ?? 0));
+
+  return (
+    <ChartCard
+      title="Subscription limits"
+      sub={
+        `Reported by Claude${at ? ` · as of ${new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` +
+        (overage ? " · on overage credits" : "")
+      }
+      right={keys.length ? <span className="mono in-card-n" style={{ color: tone }}>{statusText}</span> : undefined}
+    >
+      <div style={{ display: "grid", gap: 15 }}>
+        {rows.map((r) => <RateRow key={r.key} row={r} />)}
+      </div>
+      {!rows.some((r) => r.pct !== null) && (
+        <div className="in-card-s">
+          Couldn&apos;t read Claude&apos;s usage panel, and the SDK only sends a percentage once a window climbs toward its
+          cap — the status and reset times above are still live.
+        </div>
+      )}
+    </ChartCard>
+  );
+}
+
 const LegendSwatch = ({ color, label, dim }: { color: string; label: string; dim?: boolean }) => (
   <span className="in-leg" style={dim ? { color: "var(--ink-4)" } : undefined}>
     <span className="in-leg-dot" style={{ background: color, opacity: dim ? 0.3 : 1 }} />
@@ -464,6 +583,14 @@ export function InsightsView({ agents, onClose }: { agents: AgentsBundle; onClos
             <span className="in-sparse mono">{activeDays} DAY{activeDays === 1 ? "" : "S"} OF ACTIVITY SO FAR</span>
           )}
         </div>
+
+        {/* subscription limits — unaffected by the range/project/agent filters
+            below, since it is a live account-wide reading, not history. */}
+        {(data.limits?.length > 0 || Object.keys(data.rateLimits ?? {}).length > 0) && (
+          <div style={{ marginBottom: 16 }}>
+            <SubscriptionCard limits={data.limits ?? []} windows={data.rateLimits ?? {}} />
+          </div>
+        )}
 
         {/* filter row */}
         <div className="in-filters">

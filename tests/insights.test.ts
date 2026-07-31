@@ -5,7 +5,10 @@ import {
   createProject,
   createTask,
   getInsightsData,
+  getRateLimits,
+  recordRateLimit,
   recordTaskMerge,
+  setSetting,
   updateTask,
 } from "../lib/store";
 import { commitFile, makeRepoWithWorktree, tmpDir, writeFile } from "./helpers";
@@ -90,5 +93,29 @@ describe("getInsightsData", () => {
     const later = getInsightsData(Date.now() + DAY);
     expect(later.merges.filter((r) => r.p === project.id)).toHaveLength(0);
     expect(later.shipped.filter((r) => r.p === project.id)).toHaveLength(0);
+  });
+});
+
+describe("rate limits", () => {
+  it("keeps one snapshot per window instead of overwriting", () => {
+    setSetting("rate_limit_info", null);
+    recordRateLimit({ status: "allowed", rateLimitType: "five_hour", resetsAt: 111, utilization: 14 });
+    recordRateLimit({ status: "allowed_warning", rateLimitType: "seven_day", resetsAt: 222 });
+    recordRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 21, resetsAt: 111 });
+
+    const all = getRateLimits();
+    expect(Object.keys(all).sort()).toEqual(["five_hour", "seven_day"]);
+    expect(all.five_hour.utilization).toBe(21); // newest wins within a window
+    expect(all.seven_day.status).toBe("allowed_warning"); // other window survives
+    expect(all.five_hour.at).toBeGreaterThan(0);
+  });
+
+  it("re-keys the pre-map flat snapshot", () => {
+    setSetting("rate_limit_info", JSON.stringify({ status: "allowed", rateLimitType: "five_hour", resetsAt: 9, at: 1 }));
+    expect(getRateLimits()).toEqual({ five_hour: { status: "allowed", rateLimitType: "five_hour", resetsAt: 9, at: 1 } });
+
+    setSetting("rate_limit_info", "not json");
+    expect(getRateLimits()).toEqual({});
+    setSetting("rate_limit_info", null);
   });
 });
