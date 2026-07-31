@@ -72,6 +72,16 @@ RUN npm install -g @anthropic-ai/claude-code && claude --version
 # PATH lookup and the auth helpers resolve it next to `claude`.
 RUN npm install -g @openai/codex && codex --version
 
+# Chromium's shared libraries (libnss3/libatk/libgbm/libasound/...). Projects
+# with Playwright e2e tests and the Playwright MCP server both need these, and
+# neither can install them at runtime: the rootfs is read-only and the container
+# drops all capabilities. Only the OS deps are baked in — each project downloads
+# the browser build matching its own Playwright version into ~/.cache on the
+# home volume, so this never has to track a browser revision.
+# ponytail: pinned so the dep list is reproducible; bump when Chromium needs newer libs.
+RUN npx --yes playwright@1.58.2 install-deps chromium \
+  && rm -rf /var/lib/apt/lists/* /root/.npm
+
 # Replace the base image's `node` user so uid 1000 owns /home/orch — named
 # volumes initialize from this skeleton with correct ownership on first mount.
 RUN userdel -r node \
