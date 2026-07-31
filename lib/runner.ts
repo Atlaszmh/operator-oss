@@ -16,6 +16,7 @@ import { worktreeSyncStatus, fastForwardWorktree } from "@/lib/git";
 import { track } from "@/lib/analytics";
 import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE } from "@/lib/promptLimits";
 import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
+import { isUsageLimit, USAGE_LIMIT_NOTICE } from "@/lib/usageLimit";
 import { markAgentAuthBroken, clearAgentAuthBroken } from "@/lib/agents/connections";
 import type { Task, Project, ToolData, TurnUsage } from "@/lib/types";
 
@@ -141,7 +142,10 @@ export async function startResumeTurn(task: Task, project: Project, userText: st
  *     CONTEXT_OVERFLOW_NOTICE, which the UI turns into a one-click "Start fresh
  *     context" (/clear) button;
  *   - a dead agent login (expired OAuth session, revoked/invalid key) →
- *     AUTH_EXPIRED_NOTICE, which becomes a "Reconnect <agent>" button.
+ *     AUTH_EXPIRED_NOTICE, which becomes a "Reconnect <agent>" button;
+ *   - a spent usage limit (Claude's 5-hour/weekly subscription cap, an API 429)
+ *     → USAGE_LIMIT_NOTICE, informational — the recovery is waiting for the
+ *     reset, so there is no button.
  * Either way the raw provider text stays visible above the hint, so token counts
  * and the actual wording remain legible. The persisted message is the durable
  * channel — it survives SSE reconnects because the snapshot replays from SQLite.
@@ -151,7 +155,9 @@ export function publishTurnError(id: string, gen: number, errText: string): void
     ? CONTEXT_OVERFLOW_NOTICE
     : isAuthFailure(errText)
       ? AUTH_EXPIRED_NOTICE
-      : null;
+      : isUsageLimit(errText)
+        ? USAGE_LIMIT_NOTICE
+        : null;
   const content = notice ? `⚠ ${errText}\n\n${notice}` : `⚠ ${errText}`;
   // The persist can itself throw — most importantly when the task row is gone
   // (project/task deleted mid-turn): addMessage then hits a FOREIGN KEY error.
@@ -190,6 +196,12 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
   // agent's login is dead instance-wide, so the queue must be parked (every
   // follow-up would fail identically) and the whole app told, not just this task.
   let authFailure: string | null = null;
+  // Set when this turn died on a spent usage limit (Claude's 5-hour/weekly
+  // subscription cap, an API 429): the quota is dead until it resets, so the
+  // queue must be parked for the same reason — every follow-up would drain
+  // straight into the same limit. Classified after authFailure (a dead login
+  // never doubles as a spent quota).
+  let usageLimitFailure: string | null = null;
   const startedAt = Date.now();
 
   // Persist + publish a failed turn's transcript line (with a recovery hint when
@@ -298,6 +310,7 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
         // on context overflow / a dead login).
         turnError = ev.content;
         if (failTurn(ev.content)) authFailure = ev.content;
+        else if (isUsageLimit(ev.content)) usageLimitFailure = ev.content;
       } else if (ev.type === "notice") {
         // A quiet system note emitted mid-turn (e.g. expose_service confirming a
         // live URL). Persist it so a reload still shows the line, like syncNote.
@@ -315,6 +328,7 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
     // listening when this fires — the transcript must carry it.
     turnError = err instanceof Error ? err.message : String(err);
     if (failTurn(turnError)) authFailure = turnError;
+    else if (isUsageLimit(turnError)) usageLimitFailure = turnError;
   } finally {
     // NOTE: this whole block is synchronous (better-sqlite3, in-memory pub/sub),
     // so nothing can interleave with it — the registry slot is either handed off
@@ -392,16 +406,18 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
       continued = true;
     } else if (abortController.signal.aborted || generationAdvanced) {
       for (const p of clearPendingMessages(id)) publish(id, { type: "dequeued", msgId: p.id });
-    } else if (authFailure) {
-      // The login is dead, not the work: draining now would run each follow-up
-      // straight into the same authentication error, emptying the queue and
-      // stacking identical walls of red for messages that never actually ran.
-      // Leave them parked (they're rows in pending_messages, so they survive a
-      // reload and still render as queued bubbles) and say so once. They drain
-      // normally at the end of the next turn, after a reconnect.
+    } else if (authFailure || usageLimitFailure) {
+      // The login (or the quota) is dead, not the work: draining now would run
+      // each follow-up straight into the same authentication error / spent
+      // limit, emptying the queue and stacking identical walls of red for
+      // messages that never actually ran. Leave them parked (they're rows in
+      // pending_messages, so they survive a reload and still render as queued
+      // bubbles) and say so once. They drain normally at the end of the next
+      // turn, after a reconnect / once the limit resets.
       const parked = listPendingMessages(id).length;
       if (parked) {
-        const note = `ℹ ${parked} queued message${parked === 1 ? "" : "s"} kept in the queue — ${parked === 1 ? "it runs" : "they run"} once you reconnect.`;
+        const when = authFailure ? "once you reconnect" : "once the limit resets";
+        const note = `ℹ ${parked} queued message${parked === 1 ? "" : "s"} kept in the queue — ${parked === 1 ? "it runs" : "they run"} ${when}.`;
         const m = addMessage(id, gen, "system", note);
         publish(id, { type: "notice", content: note, msgId: m.id, generation: gen });
       }
