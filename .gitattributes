@@ -1,0 +1,4 @@
+# Everything checks out with LF, on every platform. Without this a Windows
+# clone gets CRLF and docker/entrypoint.sh dies on its shebang inside the
+# Linux image — and every file shows as modified against a Linux-authored tree.
+* text=auto eol=lf
