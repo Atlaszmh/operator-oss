@@ -803,7 +803,6 @@ a.tc-btn{display:inline-flex;align-items:center;text-decoration:none;line-height
 /* tool call block (expandable) */
 .tool{font-family:var(--mono);font-size:12px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface-2);overflow:hidden;}
 .tool-h{display:flex;align-items:center;gap:8px;padding:8px 12px;color:var(--ink-2);width:100%;text-align:left;font-family:var(--mono);font-size:12px;}
-.tool-h:hover{background:var(--panel-2);}
 .tool-h .tchev{flex:0 0 auto;color:var(--ink-4);display:inline-flex;transition:transform .14s;}
 .tool-h .tchev svg{width:13px;height:13px;}
 .tool-h .tchev.open{transform:rotate(90deg);}
@@ -813,14 +812,17 @@ a.tc-btn{display:inline-flex;align-items:center;text-decoration:none;line-height
 .tool-h .tcheck svg,.tool-h .tx svg{width:14px;height:14px;}
 /* file affordance: a sibling of .tool-h, since .tool-h is the expand toggle and
    a button cannot nest inside a button */
-.tool-row{display:flex;align-items:center;gap:4px;padding-right:8px;}
+.tool-row{display:flex;align-items:center;gap:4px;}
 .tool-row>.tool-h{flex:1;min-width:0;}
-.tool-file{flex:0 0 auto;display:inline-flex;padding:4px;border-radius:5px;color:var(--ink-4);}
-.tool-file:hover{color:var(--ink-2);background:var(--panel-2);}
+/* Trailing gap lives on the button, not the row: on the row it would also indent
+   the ✓/✗ of file-less rows, so consecutive tool calls jittered horizontally. */
+.tool-file{flex:0 0 auto;display:inline-flex;padding:4px;margin-right:8px;border-radius:5px;color:var(--ink-4);}
+/* accent-soft, not surface-2/panel-2: those two are the same colour in the light
+   theme, so the row hover would already have painted it and nothing would read. */
+.tool-file:hover{color:var(--ink-2);background:var(--accent-soft);}
 .tool-file svg{width:13px;height:13px;}
-/* .tool-h's own hover (line 806) now covers only its shrunken flex box, so the
-   highlight would stop short of the new button. Paint the ROW instead, so the
-   sweep spans the full width as it did when .tool-h was width:100% */
+/* The row owns the hover sweep, not .tool-h — .tool-h is now a shrunken flex box,
+   so its own highlight would stop short of the file button. */
 .tool-row:hover{background:var(--panel-2);}
 .tool-body{border-top:1px solid var(--line-2);background:var(--panel-2);}
 .tool-pre{margin:0;padding:11px 13px;font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;}
@@ -1082,6 +1084,7 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 .field input[type=number]::-webkit-outer-spin-button,.field input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .field input:focus,.field textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
 .field .ctx-mono{font-family:var(--mono);font-size:12.5px;}
+.hlp{font-size:11.5px;color:var(--ink-3);line-height:1.45;}
 .field .hlp{font-size:11.5px;color:var(--ink-3);margin-top:7px;line-height:1.45;}
 
 .seg{display:flex;gap:6px;}

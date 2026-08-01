@@ -81,7 +81,9 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
       const r = await fetch(`${src}&download=1`);
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        setDlError(j.error || "File is too large to download.");
+        // The button is disabled when !downloadable, so too-large is unreachable
+        // here; the realistic non-ok is a 404 for a file that has since vanished.
+        setDlError(j.error || "File is no longer available.");
         return;
       }
       const url = URL.createObjectURL(await r.blob());
@@ -89,7 +91,9 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
       a.href = url;
       a.download = data?.name || "file";
       a.click();
-      URL.revokeObjectURL(url);
+      // click() returns before the download fetch resolves the blob URL, so
+      // revoking synchronously races it (Firefox drops the download outright).
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       setDlError("Download failed.");
     }
@@ -105,7 +109,9 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
     if (!data.viewable && data.reason === "too-large")
       return <div className="hlp">This file is {fmtSize(data.size)} — too large to show here. Download it instead.</div>;
     if (!data.viewable) return <div className="hlp">This looks like a binary file. Download it instead.</div>;
-    return <pre ref={preRef} className="tool-pre" style={{ maxHeight: "60vh", overflow: "auto" }}>{data.content}</pre>;
+    // tabIndex makes the scroll box reachable by keyboard — only Firefox focuses
+    // scroll containers on its own, so elsewhere a long file was unscrollable.
+    return <pre ref={preRef} className="tool-pre" tabIndex={0} aria-label={data.name} style={{ maxHeight: "60vh", overflow: "auto" }}>{data.content}</pre>;
   };
 
   const copyLabel = copied === "ok" ? "Copied" : copied === "fail" ? "Copy failed — text selected, press Ctrl/Cmd+C" : "Copy";
