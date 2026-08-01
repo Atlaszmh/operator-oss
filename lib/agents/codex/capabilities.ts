@@ -29,12 +29,15 @@ export const CODEX_CAPABILITIES: AgentCapabilities = {
     { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", sub: "previous coding-optimized model", contextWindow: CTX, group: "Previous versions" },
     { value: "gpt-5.2", label: "GPT-5.2", sub: "previous model for long-running agents", contextWindow: CTX, group: "Previous versions" },
   ],
-  // Off/Think/Think hard/Ultrathink → codex's model_reasoning_effort scale.
+  // Off/Think/Think hard/Ultrathink → codex's model_reasoning_effort scale
+  // (low/medium/high/xhigh — see EFFORT in ./driver.ts). Codex can't disable
+  // reasoning ("minimal" 400s the turn), so "Off" is its floor, "low"; the
+  // subs name the actual effort each preset sends so the picker stays honest.
   reasoningOptions: [
-    { value: "off", label: "Off", sub: "minimal reasoning" },
-    { value: "think", label: "Think", sub: "light reasoning" },
-    { value: "think_hard", label: "Think hard", sub: "deeper reasoning" },
-    { value: "ultrathink", label: "Ultrathink", sub: "maximum reasoning" },
+    { value: "off", label: "Off", sub: "low effort — codex's minimum" },
+    { value: "think", label: "Think", sub: "medium effort (codex default)" },
+    { value: "think_hard", label: "Think hard", sub: "high effort" },
+    { value: "ultrathink", label: "Ultrathink", sub: "extra-high effort" },
   ],
   // Only the modes with a real codex analog are declared. bypassPermissions maps
   // to workspace-write + approvals-never (auto-run); plan maps to a read-only
