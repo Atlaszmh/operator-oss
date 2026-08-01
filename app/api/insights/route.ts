@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getInsightsData } from "@/lib/store";
+import { readClaudeUsage } from "@/lib/claude-usage";
+import { getInsightsData, getRateLimits } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -11,5 +12,10 @@ const WINDOW_DAYS = 180;
 
 export async function GET() {
   const since = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  return NextResponse.json(getInsightsData(since));
+  // Subscription limits come from two places: `limits` is Claude's own /usage
+  // panel (every window, with live percentages), and `rateLimits` is the SDK's
+  // per-window snapshot from the driver — the allowed/warning/rejected status,
+  // plus a fallback set of rows if the CLI read didn't land.
+  const limits = await readClaudeUsage();
+  return NextResponse.json({ ...getInsightsData(since), limits, rateLimits: getRateLimits() });
 }

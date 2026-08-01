@@ -398,6 +398,43 @@ export function setSetting(key: string, value: string | null) {
   }
 }
 
+// ---------- subscription rate limits ----------
+// Claude's SDK emits one rate_limit_event per window (whichever is binding at
+// that moment), so a single stored snapshot only ever shows one bar. Keep the
+// newest snapshot per window type instead, and Insights renders them together
+// the way Claude's own usage panel does. `utilization` is absent until the API
+// starts reporting a percentage, so every field but `status` is optional.
+export interface RateLimitSnapshot {
+  status: "allowed" | "allowed_warning" | "rejected";
+  resetsAt?: number;
+  rateLimitType?: string;
+  utilization?: number;
+  isUsingOverage?: boolean;
+  at?: number;
+}
+
+export function getRateLimits(): Record<string, RateLimitSnapshot> {
+  const raw = getSetting("rate_limit_info");
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    // Installs from before the per-window map stored a single flat snapshot.
+    if (typeof v.status === "string") {
+      const one = v as unknown as RateLimitSnapshot;
+      return { [one.rateLimitType ?? "five_hour"]: one };
+    }
+    return v as Record<string, RateLimitSnapshot>;
+  } catch {
+    return {};
+  }
+}
+
+export function recordRateLimit(info: RateLimitSnapshot): void {
+  const all = getRateLimits();
+  all[info.rateLimitType ?? "five_hour"] = { ...info, at: Date.now() };
+  setSetting("rate_limit_info", JSON.stringify(all));
+}
+
 /**
  * Point the seeded Welcome tutorial at a different agent. The tutorial is
  * created at first boot — before onboarding — so its project/tasks carry the
