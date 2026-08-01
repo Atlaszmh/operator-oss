@@ -18,6 +18,16 @@ function isDir(p: string): boolean {
   }
 }
 
+/** Regular files only. A FIFO inside the worktree stats as size 0 but blocks
+ *  fs.readFile forever, so refusing it here keeps it away from the read site. */
+function isFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resolve a caller-supplied path to a file inside a task's workspace.
  *
@@ -44,11 +54,25 @@ export function resolveTaskFile(worktreePath: string, repoPath: string, requeste
     if (contains(oldRoot, abs)) want = path.resolve(repoPath, path.relative(oldRoot, abs));
   }
 
-  // Containment is checked lexically BEFORE any filesystem access, so the
-  // endpoint cannot be used to probe whether a path outside the root exists.
+  // Containment is checked lexically BEFORE any filesystem access on the
+  // caller-supplied path, so the endpoint cannot be used to probe whether a
+  // path outside the root exists. (isDir above touches only server-controlled
+  // values -- the roots -- which is what preserves that no-oracle property.)
+  //
+  // Accept the root in either symlinked or real form: when the root is reached
+  // via a symlink (/var -> /private/var on macOS, per tests/setup.ts), a request
+  // expressed in the other form is plainly inside the workspace but would fail
+  // the lexical check. Resolving the ROOT is still no oracle -- it is ours.
   const absRoot = path.resolve(root);
+  const rootReal = (() => {
+    try {
+      return fs.realpathSync(absRoot);
+    } catch {
+      return absRoot;
+    }
+  })();
   const lex = path.resolve(absRoot, want);
-  if (!contains(absRoot, lex)) return { ok: false, reason: "outside-root" };
+  if (!contains(absRoot, lex) && !contains(rootReal, lex)) return { ok: false, reason: "outside-root" };
 
   // realpathSync throws ENOENT for a missing path, so not-found falls out of the
   // catch — an existsSync pre-check would only add a TOCTOU window. Any other
@@ -65,7 +89,10 @@ export function resolveTaskFile(worktreePath: string, repoPath: string, requeste
   // that points at a secret outside it.
   if (!contains(realRoot, realAbs)) return { ok: false, reason: "outside-root" };
 
-  if (isDir(realAbs)) return { ok: false, reason: "not-a-file" };
+  // Anything that is not a regular file -- directory, FIFO, socket, device --
+  // is refused here rather than at the read site: a FIFO stats as size 0, so it
+  // slips past a size cap and then blocks the reader forever.
+  if (!isFile(realAbs)) return { ok: false, reason: "not-a-file" };
 
   return { ok: true, abs: realAbs, root: realRoot, fromRepoFallback: pruned };
 }

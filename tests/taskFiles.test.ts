@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { tmpDir, writeFile } from "./helpers";
@@ -34,6 +35,37 @@ describe("resolveTaskFile", () => {
       .toMatchObject({ ok: false, reason: "outside-root" });
   });
 
+  // A bare `p.startsWith(root)` in contains() passes every other test here, and
+  // is an arbitrary-file-read: root ".../wt" would admit ".../wt-evil/secret".
+  it("rejects a sibling directory sharing the root's name prefix", () => {
+    const base = tmpDir("base-");
+    const wt = path.join(base, "wt");
+    fs.mkdirSync(wt);
+    writeFile(path.join(base, "wt-evil"), "secret.txt", "s");
+    expect(resolveTaskFile(wt, "", path.join(base, "wt-evil/secret.txt")))
+      .toMatchObject({ ok: false, reason: "outside-root" });
+  });
+
+  // The other tests all point at files that EXIST, so they cannot see the
+  // lexical check being dropped or moved after the realpath block -- either
+  // turns `reason` into an existence oracle for paths outside the root.
+  it("reports outside-root without touching the filesystem", () => {
+    const wt = tmpDir("wt-");
+    expect(resolveTaskFile(wt, "", "/etc/no-such-file-xyz"))
+      .toMatchObject({ ok: false, reason: "outside-root" }); // not "not-found"
+  });
+
+  it("refuses a FIFO, which would otherwise block the reader forever", () => {
+    const wt = tmpDir("wt-");
+    try {
+      execFileSync("mkfifo", [path.join(wt, "pipe")]);
+    } catch {
+      return; // mkfifo needs a POSIX host
+    }
+    expect(resolveTaskFile(wt, "", path.join(wt, "pipe")))
+      .toMatchObject({ ok: false, reason: "not-a-file" });
+  });
+
   it("rejects a symlink inside the root that points outside it", () => {
     const wt = tmpDir("wt-");
     const outside = tmpDir("out-");
@@ -45,6 +77,22 @@ describe("resolveTaskFile", () => {
     }
     expect(resolveTaskFile(wt, "", path.join(wt, "link.txt")))
       .toMatchObject({ ok: false, reason: "outside-root" });
+  });
+
+  // Root reached via a symlink (/var -> /private/var on macOS): a request in the
+  // real form is plainly inside the workspace and must not read as an escape.
+  it("accepts a file under a symlinked root expressed in real form", () => {
+    const base = tmpDir("base-");
+    const real = path.join(base, "real");
+    fs.mkdirSync(real);
+    writeFile(real, "a.txt", "hi");
+    try {
+      fs.symlinkSync(real, path.join(base, "link"));
+    } catch {
+      return; // symlink creation needs privilege on some Windows setups
+    }
+    expect(resolveTaskFile(path.join(base, "link"), "", path.join(real, "a.txt")))
+      .toMatchObject({ ok: true });
   });
 
   it("resolves a relative path against the root, not process.cwd()", () => {
@@ -66,7 +114,10 @@ describe("resolveTaskFile", () => {
     writeFile(repo, "db/x.sql", "select 2;");
     const r = resolveTaskFile(goneWt, repo, path.join(goneWt, "db/x.sql"));
     expect(r).toMatchObject({ ok: true, fromRepoFallback: true });
-    if (r.ok) expect(fs.readFileSync(r.abs, "utf8")).toBe("select 2;");
+    if (r.ok) {
+      expect(fs.readFileSync(r.abs, "utf8")).toBe("select 2;");
+      expect(r.root).toBe(fs.realpathSync(repo)); // re-anchored onto the repo
+    }
   });
 
   it("reports pruned (not outside-root) when the file never reached the repo", () => {
