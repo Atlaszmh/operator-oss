@@ -35,7 +35,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 - **Reconnect-safe turns** — turns run server-side; reload or sleep the laptop and the transcript catches up. Queue follow-ups mid-turn.
 - **Knows when your agent login dies** — an expired sign-in raises a workspace-wide banner with a one-click reconnect (plus the same button in the failed transcript). Queued follow-ups stay queued instead of failing one by one, and the banner clears itself the moment a turn runs again.
 - **Integrated terminal + managed services** — a real shell per project, plus supervised dev/setup/test processes that survive restarts, with live logs and optional public URLs.
-- **Cost tracking + insights** — live per-task spend and a local analytics dashboard.
+- **Honest usage tracking + insights** — live per-task tokens and spend, plus a local analytics dashboard. The chip leads with tokens the agent actually processed and keeps prompt-cache re-reads (usually most of the raw total) as secondary detail; on a subscription login the dollar figure is labelled as an API-price equivalent covered by your plan, not a bill.
 - **List or kanban board** — flip the workspace to a full-width board of live status columns (Suggested / Not started / In progress / Needs input / Done); drag cards to reorder or change status, click one to open its session in a slide-over. ⌘⇧B toggles.
 - Plus: agent-suggested tasks, task dependencies, image attachments, clone from GitHub, recaps, a first-run tutorial.
 
@@ -63,6 +63,18 @@ Want another agent? The driver seam is small — see [adding a new agent](docs/A
 ## Insights
 
 Open **Insights** from the top bar for a local analytics dashboard of what your agents cost and ship: per-day spend and token usage (including cache reads/writes), tasks shipped, and lines merged to base — sliceable by project and agent across 7/30/90-day ranges, with deltas against the prior period. Everything is computed from the local SQLite database in a single fetch, filter changes recompute instantly in the browser, and nothing is sent anywhere. Claude spend is the SDK-reported dollar figure; Codex spend is estimated from token counts at published API prices and marked with a `~`.
+
+### Reading the numbers
+
+The per-task chip in the session header reads `250k tok · 3.5M cached · ~$4.20`, and each part means something different:
+
+| Part | What it means |
+|-|-|
+| `250k tok` | Tokens the agent processed for the first time — prompt, completion, and context written into the prompt cache. This is the headline because it's the work that actually happened. |
+| `3.5M cached` | Prompt-cache **reads**: the conversation so far, re-sent every turn and billed at ~10% of the input rate. It dominates the raw token total on any long task and is not 3.5M tokens of new work. |
+| `~$4.20` | On a **Max/Pro or ChatGPT subscription login** this is an *API-price equivalent* — what those tokens would have cost through the API. Your turns draw on plan quota, so the marginal cost is $0 and the figure carries a `~`. With an **API key** connected instead, it's a real billed amount and shows plainly. Codex figures are additionally estimated (its CLI reports tokens only). |
+
+Hover the chip for the exact counts and the full breakdown.
 
 ## Managed services
 

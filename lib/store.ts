@@ -207,10 +207,22 @@ export function setProjectRefresh(
 
 // Tasks carry their cumulative spend (cost_usd + total_tokens, summed across all
 // turns of every generation) so the chat header can show it without an extra
-// call. `context_tokens`/`context_pct` are the LIVE context-window gauge — the
+// call. The two cache buckets ride along because `total_tokens` on its own is
+// misleading: in real sessions most of it is prompt-cache READS (context re-sent
+// every turn, billed at ~10% of the input rate), so the UI splits the total into
+// fresh work vs cached re-reads rather than showing one scary number.
+// `context_tokens`/`context_pct` are the LIVE context-window gauge — the
 // latest turn's input-side tokens, NOT a cumulative sum (see getTaskContext).
 // `depends_on` lists the task ids this task is blocked by (see task_dependencies).
-export type TaskWithUsage = Task & { cost_usd: number; total_tokens: number; context_tokens: number; context_pct: number; depends_on: string[] };
+export type TaskWithUsage = Task & {
+  cost_usd: number;
+  total_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  context_tokens: number;
+  context_pct: number;
+  depends_on: string[];
+};
 
 export function listTasks(projectId: string): TaskWithUsage[] {
   const db = getDb();
@@ -220,13 +232,21 @@ export function listTasks(projectId: string): TaskWithUsage[] {
          COALESCE((SELECT SUM(u.cost_usd) FROM task_usage u WHERE u.task_id = t.id), 0) AS cost_usd,
          COALESCE((SELECT SUM(u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_creation_tokens)
                    FROM task_usage u WHERE u.task_id = t.id), 0) AS total_tokens,
+         COALESCE((SELECT SUM(u.cache_read_tokens) FROM task_usage u WHERE u.task_id = t.id), 0) AS cache_read_tokens,
+         COALESCE((SELECT SUM(u.cache_creation_tokens) FROM task_usage u WHERE u.task_id = t.id), 0) AS cache_creation_tokens,
          COALESCE((SELECT u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
                    FROM task_usage u WHERE u.task_id = t.id
                    ORDER BY u.created_at DESC, u.rowid DESC LIMIT 1), 0) AS context_tokens
        FROM tasks t WHERE t.project_id = ?
        ORDER BY t.suggested ASC, t.position ASC, t.created_at ASC`
     )
-    .all(projectId) as (Task & { cost_usd: number; total_tokens: number; context_tokens: number })[];
+    .all(projectId) as (Task & {
+    cost_usd: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
+    context_tokens: number;
+  })[];
   // Attach each task's dependency edges in one query (project-scoped via join).
   const edges = db
     .prepare(

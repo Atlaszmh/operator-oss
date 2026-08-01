@@ -18,6 +18,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     ...task,
     cost_usd: usage.cost_usd,
     total_tokens: usage.total_tokens,
+    // The cache buckets travel with the total so the usage chip can split
+    // "fresh work" from re-read context instead of showing one inflated number.
+    cache_read_tokens: usage.cache_read_tokens,
+    cache_creation_tokens: usage.cache_creation_tokens,
     context_tokens: ctx.context_tokens,
     context_pct: ctx.context_pct,
     depends_on: getTaskDeps(id),
