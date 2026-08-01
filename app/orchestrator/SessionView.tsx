@@ -4,13 +4,13 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { Status, Priority, ToolData, AskQuestion, AskAnswers } from "@/lib/types";
 import { Icon } from "../icons";
 import TaskChanges, { type ResolveResult } from "../TaskChanges";
-import { fmtTokens, fmtCost, modelLabel, isAwaiting, buildSessions } from "./format";
+import { fmtTokens, fmtCost, modelLabel, isAwaiting, buildSessions, usageSplit, costDisplay, usageTooltip } from "./format";
 import {
   SLABEL, SSUB, AWAIT_LABEL, STATUSES, PLABEL, PRIORITIES,
   modelOptions, reasoningOptions, permissionOptions, RAIL_W,
   type ProjectRow, type TaskRow, type Msg, type SyncStatusResp, type AgentsBundle,
 } from "./types";
-import { capsFor, agentLabel } from "./agents";
+import { capsFor, agentLabel, findAgent } from "./agents";
 import { StatusDot, Avatar, Popover, AgentBadge, Skel } from "./shared";
 import { MessageView, SessionBreak } from "./Transcript";
 import { Composer } from "./Composer";
@@ -156,12 +156,13 @@ export function SessionView({ project, task, agents, messages, running, blockedB
   const models = modelOptions(caps);
   const reasoningOpts = reasoningOptions(caps);
   const permissionOpts = permissionOptions(caps);
-  // Cost display: real billed figures show plainly; agents whose auth reports
-  // tokens only (Codex on a ChatGPT plan) show an ESTIMATED figure with an ~.
-  // Only an agent that reports neither hides the $ (token counts always show).
-  // Unknown caps (bundle still loading) default to showing cost.
-  const costEstimated = caps?.costIsEstimated === true;
-  const showCost = caps?.reportsCostUsd !== false || costEstimated;
+  // Usage chip: tokens split into fresh work vs re-read cache (the raw total is
+  // mostly cache reads and wildly overstates what ran), and a dollar figure whose
+  // presentation follows how this agent is signed in — a subscription login's
+  // figure is an API-price equivalent covered by plan quota, not a bill. Both
+  // derivations live in ./format so the wording has one home.
+  const usage = usageSplit(task);
+  const cost = costDisplay(findAgent(agents, task.agent));
   const multiAgent = agents.agents.length > 1;
   // PR number for the header chip, parsed from the stored URL (…/pull/42).
   const prNum = task.pr_url?.match(/\/pull\/(\d+)/)?.[1];
@@ -310,8 +311,10 @@ export function SessionView({ project, task, agents, messages, running, blockedB
             )}
             <AgentBadge label={agentLabel(agents, task.agent)} multi={multiAgent} />
             {(task.cost_usd > 0 || task.total_tokens > 0) && (
-              <span className="usage-chip" title={showCost ? `${task.total_tokens.toLocaleString()} tokens · ${costEstimated ? `~${fmtCost(task.cost_usd)} (estimated from token counts × API prices)` : fmtCost(task.cost_usd)} this task` : `${task.total_tokens.toLocaleString()} tokens this task`}>
-                {fmtTokens(task.total_tokens)} tok{showCost && <> <span className="usage-dot">·</span> {costEstimated && "~"}{fmtCost(task.cost_usd)}</>}
+              <span className="usage-chip" title={usageTooltip(usage, task.cost_usd, cost)}>
+                {fmtTokens(usage.fresh)} tok
+                {usage.cacheRead > 0 && <> <span className="usage-dot">·</span> <span className="usage-cached">{fmtTokens(usage.cacheRead)} cached</span></>}
+                {cost.show && <> <span className="usage-dot">·</span> {cost.approx && "~"}{fmtCost(task.cost_usd)}</>}
               </span>
             )}
             {mobile && hasSession && (
