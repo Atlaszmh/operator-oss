@@ -493,13 +493,17 @@ export function popPendingMessage(taskId: string): PendingMessage | undefined {
   })();
 }
 
-// Remove one parked follow-up by id (the user cancelled it). Returns the
-// removed row (so the caller can publish a dequeued event), or undefined.
-export function deletePendingMessage(id: string): PendingMessage | undefined {
+// Remove one parked follow-up by id (the user cancelled it). Scoped by task_id
+// so a request against one task can't drop another task's queued message.
+// Returns the removed row (so the caller can publish a dequeued event), or
+// undefined — including when the id exists but belongs to a different task.
+export function deletePendingMessage(id: string, taskId: string): PendingMessage | undefined {
   const db = getDb();
   return db.transaction(() => {
-    const row = db.prepare("SELECT * FROM pending_messages WHERE id = ?").get(id) as PendingMessage | undefined;
-    if (row) db.prepare("DELETE FROM pending_messages WHERE id = ?").run(id);
+    const row = db
+      .prepare("SELECT * FROM pending_messages WHERE id = ? AND task_id = ?")
+      .get(id, taskId) as PendingMessage | undefined;
+    if (row) db.prepare("DELETE FROM pending_messages WHERE id = ?").run(row.id);
     return row;
   })();
 }
