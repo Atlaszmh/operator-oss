@@ -25,6 +25,10 @@ const FORBIDDEN = ["@anthropic-ai/claude-agent-sdk", "@openai/codex-sdk"];
 // Modules that must stay SDK-free, and why:
 const PINNED = [
   "lib/store.ts", //     imported by nearly everything; the original poison edge
+  // Was types-only, so every importer's `import type` erased it entirely. It now
+  // exports toolData(), value-imported by the "use client" useTaskStream — so
+  // anything it gains from here lands in the client bundle.
+  "lib/types.ts",
   "lib/services.ts", //  behind sync-compiled routes (grant, services-restore)
   "lib/db.ts",
   "lib/agents/capabilities.ts", // the whole point of the module

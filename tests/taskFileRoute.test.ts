@@ -53,6 +53,9 @@ describe("inline read: size and binary gates", () => {
     write("hello.txt", "line one\nline two\n");
     const body = await (await fetchFile("hello.txt")).json();
     expect(body).toMatchObject({ name: "hello.txt", viewable: true, content: "line one\nline two\n", downloadable: true });
+    // `name` is normalized before basename: a trailing "/." resolves to the same
+    // file, and without the normalize would be sent to the browser as ".".
+    expect((await (await fetchFile("hello.txt/.")).json()).name).toBe("hello.txt");
   });
 
   // Regression: the sniff used to scan only the first 8KB, borrowed from
