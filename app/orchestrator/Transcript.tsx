@@ -54,7 +54,7 @@ function PeekView({ peek, expandable, onExpand }: { peek: ToolPeek; expandable: 
   );
 }
 
-function ToolView({ data }: { data: ToolData }) {
+function ToolView({ data, onOpenFile }: { data: ToolData; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const hasDiff = !!data.diff?.length;
   const expandable = !!(data.detail || hasDiff || data.result !== undefined);
@@ -62,11 +62,18 @@ function ToolView({ data }: { data: ToolData }) {
   const showBody = open || (!!data.isError && data.result !== undefined);
   return (
     <div className="tool">
-      <button className="tool-h" style={{ cursor: expandable ? "pointer" : "default" }} onClick={() => expandable && setOpen((o) => !o)}>
-        {expandable && <span className={`tchev ${showBody ? "open" : ""}`}>{Icon.chevRight()}</span>}
-        <span className="tg">{data.title}</span>
-        {data.result !== undefined && <span className={data.isError ? "tx" : "tcheck"}>{data.isError ? Icon.x() : Icon.check()}</span>}
-      </button>
+      <div className="tool-row">
+        <button className="tool-h" style={{ cursor: expandable ? "pointer" : "default" }} onClick={() => expandable && setOpen((o) => !o)}>
+          {expandable && <span className={`tchev ${showBody ? "open" : ""}`}>{Icon.chevRight()}</span>}
+          <span className="tg">{data.title}</span>
+          {data.result !== undefined && <span className={data.isError ? "tx" : "tcheck"}>{data.isError ? Icon.x() : Icon.check()}</span>}
+        </button>
+        {data.file && onOpenFile && (
+          <button className="tool-file" title="Open file" aria-label="Open file" onClick={() => onOpenFile(data.file!)}>
+            {Icon.doc()}
+          </button>
+        )}
+      </div>
       {data.peek && !showBody && <PeekView peek={data.peek} expandable={expandable} onExpand={() => setOpen(true)} />}
       {showBody && (
         <div className="tool-body">
@@ -171,7 +178,7 @@ function AttachmentStrip({ items }: { items: MsgAttachment[] }) {
   );
 }
 
-export function MessageView({ m, initial, hideWho, running, agent, agentLabel = "The agent", onAnswer, onCancelQueued, onClear, onReconnect }: { m: Msg; initial: boolean; hideWho: boolean; running?: boolean; agent?: string | null; agentLabel?: string; onAnswer?: (askId: string, questions: AskQuestion[], answers: AskAnswers) => void; onCancelQueued?: (pendingId: string) => void; onClear?: () => void; onReconnect?: () => void }) {
+export function MessageView({ m, initial, hideWho, running, agent, agentLabel = "The agent", onAnswer, onCancelQueued, onClear, onReconnect, onOpenFile }: { m: Msg; initial: boolean; hideWho: boolean; running?: boolean; agent?: string | null; agentLabel?: string; onAnswer?: (askId: string, questions: AskQuestion[], answers: AskAnswers) => void; onCancelQueued?: (pendingId: string) => void; onClear?: () => void; onReconnect?: () => void; onOpenFile?: (path: string) => void }) {
   if (m.role === "queued") {
     // A follow-up the user typed mid-turn, waiting its turn. Reads like a user
     // bubble but dimmed, tagged "Queued", with an × to drop it before it runs.
@@ -193,7 +200,7 @@ export function MessageView({ m, initial, hideWho, running, agent, agentLabel = 
     if (data.ask) {
       return <div className="msg msg-tool"><AskView data={data} agentLabel={agentLabel} onAnswer={(answers) => onAnswer?.(data.ask?.id || m.toolId || "", data.ask?.questions ?? [], answers)} /></div>;
     }
-    return <div className="msg msg-tool"><ToolView data={data} /></div>;
+    return <div className="msg msg-tool"><ToolView data={data} onOpenFile={onOpenFile} /></div>;
   }
   if (m.role === "system") {
     // A context-overflow failure: render the warning line plus a one-click path

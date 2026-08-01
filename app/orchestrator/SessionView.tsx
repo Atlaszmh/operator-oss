@@ -13,6 +13,7 @@ import {
 import { capsFor, agentLabel } from "./agents";
 import { StatusDot, Avatar, Popover, AgentBadge, Skel } from "./shared";
 import { MessageView, SessionBreak } from "./Transcript";
+import { FileViewer } from "./FileViewer";
 import { Composer } from "./Composer";
 import { SessionRail } from "./SessionRail";
 import { ColResize, ColRail } from "./Layout";
@@ -133,6 +134,7 @@ export function SessionView({ project, task, agents, messages, running, blockedB
   const [modelOpen, setModelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [view, setView] = useState<"chat" | "changes">("chat");
+  const [filePath, setFilePath] = useState<string | null>(null);
   const sessions = useMemo(() => buildSessions(messages), [messages]);
   const hasSession = task.started === 1 || messages.length > 0;
   const awaiting = isAwaiting(task);
@@ -245,7 +247,7 @@ export function SessionView({ project, task, agents, messages, running, blockedB
                 const prev = s.messages[mi - 1];
                 // collapse the repeated "Claude Code" header across an assistant run (text → tool → text)
                 const hideWho = m.role === "assistant" && !!prev && (prev.role === "assistant" || prev.role === "tool");
-                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agent={task.agent} agentLabel={agentLabel(agents, task.agent)} onAnswer={onAnswer} onCancelQueued={onCancelQueued} onClear={onClear} onReconnect={onReconnect} />;
+                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agent={task.agent} agentLabel={agentLabel(agents, task.agent)} onAnswer={onAnswer} onCancelQueued={onCancelQueued} onClear={onClear} onReconnect={onReconnect} onOpenFile={setFilePath} />;
               })}
             </div>
           ))}
@@ -435,6 +437,8 @@ export function SessionView({ project, task, agents, messages, running, blockedB
         ) : (
           chatPane
         )}
+
+        {filePath && <FileViewer taskId={task.id} path={filePath} onClose={() => setFilePath(null)} />}
       </div>
   );
 }
