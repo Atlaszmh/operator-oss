@@ -107,6 +107,23 @@ still be green, and `tsc` must report those same 3 errors and no more.
 - Create: `lib/taskFiles.ts`
 - Test: `tests/taskFiles.test.ts`
 
+> **Implemented as `d71412d` + `02d2ad4`, with two deliberate deviations from the
+> code below** — both came out of code review and are improvements, so treat the
+> committed file as authoritative, not this block:
+> 1. The final check is `!isFile(realAbs)` rather than `isDir(realAbs)`. A FIFO
+>    inside a worktree resolved as a valid file *and* stats as size 0, so it would
+>    have slipped past the endpoint's size gate and blocked `readFile` forever.
+>    Directories, FIFOs, sockets and devices are now all refused as `not-a-file`.
+> 2. The lexical pre-filter accepts the root in either `path.resolve` or
+>    `realpathSync` form. Comparing only the former rejected legitimate files
+>    whenever the root was reached through a symlink. Containment still rests
+>    entirely on the unchanged post-`realpath` check, and the added syscall is on
+>    the server-controlled root, never the caller's path.
+>
+> The suite also gained 4 tests (15 total) pinning the sibling-prefix bypass, the
+> no-oracle ordering, the FIFO case and the symlinked root — three mutants that
+> previously passed all 11 tests now fail.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/taskFiles.test.ts`:

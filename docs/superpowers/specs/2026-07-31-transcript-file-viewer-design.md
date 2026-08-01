@@ -119,7 +119,12 @@ It takes plain strings rather than `Task` and `Project` objects, matching
 builds one. The route passes `task.worktree_path` and `project.repo_path`.
 
 `abs` is the **post-`realpath`** path, so the route reads exactly what was
-validated and the TOCTOU window closes; the response's `name` is the basename of
+validated, which **narrows** the check-then-read window — it does not close it,
+since any component can still be re-symlinked between the resolver's `realpath`
+and the route's `stat`/`read`. That residual race grants nothing: the server and
+the agent both run as uid 1000 (`Dockerfile`, `USER orch`), so an agent able to
+win it can simply read the secret directly, as the threat-model note below says.
+The response's `name` is the basename of
 the *requested* path, so the download filename matches what the user clicked.
 `root` exists so tests can assert which root was chosen. `fromRepoFallback` is
 true whenever a successful resolution came from `repoPath` **because the
