@@ -70,9 +70,9 @@ The per-task chip in the session header reads `250k tok · 3.5M cached · ~$4.20
 
 | Part | What it means |
 |-|-|
-| `250k tok` | Tokens the agent processed for the first time — prompt, completion, and context written into the prompt cache. This is the headline because it's the work that actually happened. |
+| `250k tok` | Tokens the agent processed for the first time: prompt, completion, and context written into the prompt cache. This is the headline because it's the work that actually happened. |
 | `3.5M cached` | Prompt-cache **reads**: the conversation so far, re-sent every turn and billed at ~10% of the input rate. It dominates the raw token total on any long task and is not 3.5M tokens of new work. |
-| `~$4.20` | On a **Max/Pro or ChatGPT subscription login** this is an *API-price equivalent* — what those tokens would have cost through the API. Your turns draw on plan quota, so the marginal cost is $0 and the figure carries a `~`. With an **API key** connected instead, it's a real billed amount and shows plainly. Codex figures are additionally estimated (its CLI reports tokens only). |
+| `~$4.20` | On a **Max/Pro or ChatGPT subscription login** this is an *API-price equivalent*: what those tokens would have cost through the API. Your turns draw on plan quota, so the marginal cost is $0 and the figure carries a `~`. With an **API key** connected instead, it's a real billed amount and shows plainly. Codex figures are additionally estimated (its CLI reports tokens only). |
 
 Hover the chip for the exact counts and the full breakdown.
 

@@ -78,7 +78,7 @@ export function costDisplay(agent: AgentInfo | undefined): CostDisplay {
   const planName = plan && !/^api$/i.test(plan) ? `your ${plan} plan` : "your plan";
   const source = estimated ? "estimated from token counts × published API prices" : "API-price equivalent";
   const note = subscription
-    ? `${source} — this ran on ${planName} login, so it draws on plan quota, not a bill`
+    ? `${source}: this ran on ${planName} login, so it draws on plan quota, not a bill`
     : estimated
       ? source
       : "";
@@ -91,10 +91,10 @@ export function costDisplay(agent: AgentInfo | undefined): CostDisplay {
 export function usageTooltip(split: UsageSplit, costUsd: number, cost: CostDisplay): string {
   const n = (v: number) => v.toLocaleString();
   const lines = [
-    `${n(split.fresh)} new tokens this task — ${n(split.inOut)} in/out · ${n(split.cacheWrite)} written to cache`,
+    `${n(split.fresh)} new tokens this task: ${n(split.inOut)} in/out · ${n(split.cacheWrite)} written to cache`,
   ];
   if (split.cacheRead > 0) {
-    lines.push(`${n(split.cacheRead)} cache reads — context re-read each turn, billed at ~10% of the input rate`);
+    lines.push(`${n(split.cacheRead)} cache reads (context re-read each turn, billed at ~10% of the input rate)`);
     lines.push(`${n(split.total)} tokens total`);
   }
   if (cost.show && costUsd > 0) {

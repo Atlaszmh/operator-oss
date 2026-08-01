@@ -105,6 +105,6 @@ describe("usageTooltip", () => {
 
   it("drops the cache lines when nothing was cached", () => {
     const text = usageTooltip(usageSplit({ total_tokens: 900, cache_read_tokens: 0, cache_creation_tokens: 0 }), 0, costDisplay(undefined));
-    expect(text).toBe("900 new tokens this task — 900 in/out · 0 written to cache");
+    expect(text).toBe("900 new tokens this task: 900 in/out · 0 written to cache");
   });
 });
