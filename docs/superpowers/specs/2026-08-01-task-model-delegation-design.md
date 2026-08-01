@@ -180,8 +180,9 @@ Both consumers declare them as `z.string().optional()`:
 Not `z.enum`. The bridge is plain Node ESM and cannot import the TypeScript
 capability descriptors, so an enum would exist on one side only and the two
 schemas would drift — the exact failure `lib/agentToolDefs.mjs` was created to
-prevent, and which `tests/toolDescriptor.test.ts` guards. The menu lives in the
-prompt; the enforcement lives in one server-side place, below.
+prevent. Nothing tests that parity today; the shared param strings are what
+enforce it, and both call sites `.describe()` from the same constant. The menu
+lives in the prompt; value enforcement lives in one server-side place, below.
 
 ### 5. Validation
 
@@ -252,8 +253,13 @@ something is opened, and an invisible assignment is one no one will trust.
   valid model and reasoning persists both to the task row. One with an
   unrecognised model persists `NULL` *and* returns text containing the
   correction note. An untiered-but-valid model is accepted.
-- **`tests/toolDescriptor.test.ts`** — extended to cover the two new params, so
-  the driver and bridge schemas cannot drift.
+- **`tests/orchMcp.test.ts`** — the bridge's own test spawns the real
+  `scripts/orch-mcp.mjs` against a fake app server and asserts what it forwards.
+  Extended so a `suggest_task` call carrying model and reasoning is shown
+  arriving at the internal endpoint. This is the only test that can catch the
+  bridge half being forgotten.
+- **`app/api/internal/agent-tools/suggest-task/route.ts`** — covered by the
+  existing endpoint tests in `agentTools.test.ts`, extended for the two fields.
 - **Tier uniqueness** — one assertion that no agent's `models` declares a tier
   more than once.
 - **Prompt generation** — that a two-tier agent (Codex) emits guidance for all
@@ -263,9 +269,6 @@ something is opened, and an invisible assignment is one no one will trust.
 `tests/importGraph.test.ts` already fails if `shared.ts` reaches a driver module
 or an agent SDK; the new import is deliberately routed through
 `lib/agents/capabilities.ts` to satisfy it.
-
-`tests/orchMcp.test.ts` exercises the bridge and is checked for fallout from the
-schema change.
 
 ## Files touched
 
@@ -284,7 +287,7 @@ schema change.
 | `app/orchestrator/modals.tsx` | shared select; both modals |
 | `app/orchestrator/TaskBoard.tsx` | model label on the card |
 | `app/Orchestrator.tsx` | `agents` prop into `EditTaskModal` |
-| `tests/agentTools.test.ts`, `tests/toolDescriptor.test.ts` | coverage |
+| `tests/agentTools.test.ts`, `tests/orchMcp.test.ts` | coverage |
 | `README.md` | `suggest_task`'s parameters and the delegation behaviour |
 | `CLAUDE.md` | the `tier` convention in the agent-driver seam section |
 
