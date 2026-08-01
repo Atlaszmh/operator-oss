@@ -127,7 +127,9 @@ You need **Node 18.18+**, **macOS or Linux**, and at least one agent CLI: **Clau
 (`npm i -g @openai/codex`, ChatGPT plan). First run opens a setup wizard that signs the
 agent in from the browser — connecting **either one** completes setup (it becomes the app
 default and the tutorial runs on it) — then drops you into a 2-minute hands-on tutorial.
-Keep `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` unset so it uses your subscription, not the API.
+A stray `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the launch environment is stripped at
+boot (with a warning) so turns bill your subscription, not the API — set
+`ORCH_ALLOW_API_KEY_ENV=1` if you really do want to run on an env-provided key.
 
 Every setting is an env var with a sane default — see [`.env.example`](.env.example).
 
