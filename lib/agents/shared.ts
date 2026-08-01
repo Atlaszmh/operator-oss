@@ -156,7 +156,7 @@ export function summarizeResult(kind: ResultKind, raw: string): ToolPeek {
 export function describeToolUse(
   name: string,
   input: Record<string, unknown>
-): { title: string; detail: string; peek?: ToolPeek; diff?: DiffLine[]; resultKind?: ResultKind } {
+): { title: string; detail: string; file?: string; peek?: ToolPeek; diff?: DiffLine[]; resultKind?: ResultKind } {
   const file = (input?.file_path || input?.path || input?.notebook_path) as string | undefined;
   const base = file ? file.split("/").slice(-1)[0] : undefined;
   switch (name) {
@@ -166,6 +166,7 @@ export function describeToolUse(
       return {
         title: `✎ Write ${base ?? "file"}`,
         detail: file ?? "",
+        file,
         diff: capDiff(diff),
         peek: diffPeek(diff, `Wrote ${plural(diff.length, "line")}${base ? ` to ${base}` : ""}`),
       };
@@ -176,10 +177,10 @@ export function describeToolUse(
         typeof input?.old_string === "string" ? input.old_string : "",
         typeof input?.new_string === "string" ? input.new_string : ""
       );
-      return { title: `✎ Edit ${base ?? "file"}`, detail: file ?? "", diff: capDiff(diff), peek: diffPeek(diff) };
+      return { title: `✎ Edit ${base ?? "file"}`, detail: file ?? "", file, diff: capDiff(diff), peek: diffPeek(diff) };
     }
     case "Read":
-      return { title: `📖 Read ${base ?? "file"}`, detail: file ?? "", resultKind: "read" };
+      return { title: `📖 Read ${base ?? "file"}`, detail: file ?? "", file, resultKind: "read" };
     case "Bash":
       return { title: `❯ ${String(input?.command ?? "").split("\n")[0].slice(0, 70)}`, detail: clip(input?.command), resultKind: "output" };
     case "Grep":
