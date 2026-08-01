@@ -199,7 +199,7 @@ export type StreamEvent =
   | { type: "session"; sessionId: string }
   | { type: "model"; model: string }
   | { type: "assistant"; content: string }
-  | { type: "tool"; id: string; title: string; detail: string; peek?: ToolPeek; diff?: DiffLine[] }
+  | { type: "tool"; id: string; title: string; detail: string; file?: string; peek?: ToolPeek; diff?: DiffLine[] }
   | { type: "tool_result"; id: string; content: string; isError: boolean; peek?: ToolPeek }
   | { type: "ask"; id: string; questions: AskQuestion[] }
   | { type: "ask_answered"; id: string; answers: AskAnswers }
@@ -272,6 +272,10 @@ export interface ToolData {
   detail?: string;
   result?: string;
   isError?: boolean;
+  // Absolute path of the file this call wrote or read, when it had one. Powers
+  // the transcript's open-file affordance. Absent on messages persisted before
+  // that feature, and on tools with no file (Bash, Grep, …).
+  file?: string;
   // Always-visible summary/snippet of the call's effect (see ToolPeek). Input-
   // derived peeks (diff/todos/write) are set with the tool event; result-derived
   // peeks (read count, bash output) are filled in when the tool_result arrives.

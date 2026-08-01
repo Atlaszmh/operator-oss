@@ -249,7 +249,7 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
         const m = addMessage(id, gen, "assistant", ev.content);
         publish(id, { ...ev, msgId: m.id, generation: gen });
       } else if (ev.type === "tool") {
-        const data: ToolData = { title: ev.title, detail: ev.detail, peek: ev.peek, diff: ev.diff };
+        const data: ToolData = { title: ev.title, detail: ev.detail, file: ev.file, peek: ev.peek, diff: ev.diff };
         const m = addMessage(id, gen, "tool", JSON.stringify(data));
         toolMsgs[ev.id] = { dbId: m.id, data };
         publish(id, { ...ev, msgId: m.id, generation: gen });

@@ -98,7 +98,7 @@ export function useTaskStream({ selTask, selProjRef, agentsRef, setTaskRunning, 
     else if (ev.type === "model") setTasks((prev) => prev.map((x) => (x.id === taskId ? { ...x, resolved_model: ev.model } : x)));
     else if (ev.type === "assistant") upsertMsg(taskId, { id: ev.msgId ?? `a-${Date.now()}-${Math.random()}`, role: "assistant", content: ev.content, generation: gen });
     else if (ev.type === "tool") {
-      const data: ToolData = { title: ev.title, detail: ev.detail, peek: ev.peek, diff: ev.diff };
+      const data: ToolData = { title: ev.title, detail: ev.detail, file: ev.file, peek: ev.peek, diff: ev.diff };
       upsertMsg(taskId, { id: ev.msgId ?? `t-${Date.now()}-${Math.random()}`, role: "tool", content: JSON.stringify(data), generation: gen, toolId: ev.id });
     } else if (ev.type === "tool_result") {
       // Match by DB message id (works on snapshot-loaded messages too), falling
