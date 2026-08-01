@@ -2,28 +2,38 @@ import fs from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { getTask, getProject } from "@/lib/store";
-import { resolveTaskFile } from "@/lib/taskFiles";
+import { resolveTaskFile, type Resolved } from "@/lib/taskFiles";
 
 export const dynamic = "force-dynamic";
 
 const INLINE_MAX = 512 * 1024; // renders in one <pre>, including on a phone
 const DOWNLOAD_MAX = 25 * 1024 * 1024; // read into memory — bound it
 
-const COPY: Record<string, string> = {
+// Exhaustive over Resolved's failures on purpose: adding a reason there must
+// fail to compile here until its copy is written, rather than silently
+// degrading to the generic "no longer available".
+type FailReason = Extract<Resolved, { ok: false }>["reason"];
+
+const COPY: Record<FailReason, string> = {
   "no-root": "File is no longer available.",
   "not-found": "File is no longer available.",
   pruned: "This task's workspace was cleaned up, and the file wasn't merged into the repo.",
-  "not-a-file": "That path is a directory.",
+  "not-a-file": "That path isn't a regular file.",
   "outside-root": "This file is outside the task's workspace, so it can't be opened here.",
 };
 
-/** Every failure is 404 so the endpoint never confirms a path outside the root. */
-function fail(reason: string) {
-  return NextResponse.json({ error: COPY[reason] ?? COPY["not-found"], reason }, { status: 404 });
+/**
+ * Uniform 404 status for every failure, so the STATUS never distinguishes a
+ * missing file from one outside the root. The body does carry `reason` —
+ * deliberately: `outside-root` is decided lexically, before any filesystem
+ * access, so naming it reveals nothing about what exists on disk.
+ */
+function fail(reason: FailReason) {
+  return NextResponse.json({ error: COPY[reason], reason }, { status: 404 });
 }
 
 /** Agent-chosen filenames reach a header here: quoted ASCII + RFC 5987 for the real name. */
-function disposition(name: string): string {
+export function disposition(name: string): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
@@ -53,7 +63,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   const downloadable = size <= DOWNLOAD_MAX;
-  const name = path.basename(requested);
+  // Normalize before basename so a trailing "/." doesn't yield a name of ".".
+  // Derived from the REQUEST, not r.abs: the name should match what the user
+  // clicked, not a symlink's target.
+  const name = path.basename(path.normalize(requested));
 
   if (url.searchParams.get("download") === "1") {
     if (!downloadable) {
@@ -65,7 +78,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     } catch {
       return fail("not-found");
     }
-    return new Response(new Uint8Array(buf), {
+    // A view, not a copy: `new Uint8Array(buf)` would double peak memory on a
+    // 25MB download.
+    return new Response(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), {
       headers: {
         // Never a sniffed type: serving agent-authored content as text/html
         // would be a stored-XSS vector on the app's own origin.
@@ -87,7 +102,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   } catch {
     return fail("not-found");
   }
-  if (buf.subarray(0, 8192).includes(0)) {
+  // Scan the WHOLE buffer, not a leading window: we already hold the entire
+  // file (capped at INLINE_MAX), so a windowed sniff would just let a later NUL
+  // through into toString("utf8"), which silently substitutes U+FFFD — exactly
+  // the silent corruption this feature exists to remove. memchr over 512KB is
+  // ~50µs. ponytail: NUL-scanning still passes NUL-free non-UTF-8 (a Latin-1
+  // text file); add encoding detection only if that shows up in practice.
+  if (buf.includes(0)) {
     return NextResponse.json({ ...base, viewable: false, reason: "binary" });
   }
 

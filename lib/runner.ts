@@ -17,7 +17,7 @@ import { track } from "@/lib/analytics";
 import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE } from "@/lib/promptLimits";
 import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
 import { markAgentAuthBroken, clearAgentAuthBroken } from "@/lib/agents/connections";
-import type { Task, Project, ToolData, TurnUsage } from "@/lib/types";
+import { toolData, type Task, type Project, type ToolData, type TurnUsage } from "@/lib/types";
 
 /**
  * Kick off one user turn in the background. Returns immediately; the caller
@@ -249,7 +249,7 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
         const m = addMessage(id, gen, "assistant", ev.content);
         publish(id, { ...ev, msgId: m.id, generation: gen });
       } else if (ev.type === "tool") {
-        const data: ToolData = { title: ev.title, detail: ev.detail, file: ev.file, peek: ev.peek, diff: ev.diff };
+        const data = toolData(ev);
         const m = addMessage(id, gen, "tool", JSON.stringify(data));
         toolMsgs[ev.id] = { dbId: m.id, data };
         publish(id, { ...ev, msgId: m.id, generation: gen });

@@ -289,3 +289,16 @@ export interface ToolData {
   // it). `answers` is absent while awaiting the user, set once answered.
   ask?: { id: string; questions: AskQuestion[]; answers?: AskAnswers };
 }
+
+// The one place a "tool" event becomes a persisted ToolData. Both the runner
+// (writes the DB row) and useTaskStream (renders the live event) need this
+// object, and building it twice means a new field can be added to one and
+// forgotten in the other — links that appear only after a reload. Shared so
+// that failure mode can't exist.
+export const toolData = (ev: Extract<StreamEvent, { type: "tool" }>): ToolData => ({
+  title: ev.title,
+  detail: ev.detail,
+  file: ev.file,
+  peek: ev.peek,
+  diff: ev.diff,
+});
