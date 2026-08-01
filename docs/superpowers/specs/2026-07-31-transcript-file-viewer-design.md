@@ -73,10 +73,15 @@ Explicitly out of scope, and not to be added speculatively:
    emoji-prefixed `title`, which is far more brittle than carrying the path
    explicitly.
 
-2. The field must be threaded through **nine edit points — six object literals
+2. The field must be threaded through **eight edit points — five object literals
    and three type declarations**. Every literal is built field-by-field, so an
    omitted edit drops the field silently at runtime rather than failing to
-   compile where it was lost:
+   compile where it was lost.
+
+   > **As built:** the last two rows below were the same literal written twice,
+   > so review replaced them with a single shared `toolData(ev)` helper in
+   > `lib/types.ts`. That removes the drop-a-field failure mode at those sites
+   > rather than relying on care, which is why the count is eight, not nine.
 
    | Site | Kind |
    |---|---|
@@ -248,7 +253,12 @@ Limits:
   reading, so an over-limit file is never read into memory.
 - `DOWNLOAD_MAX` = 25 MB, returning `413`. Files are read into memory, so an
   unbounded read risks the container's memory cap.
-- Binary detection: a `NUL` byte in the first 8 KB.
+- Binary detection: a `NUL` byte **anywhere in the buffer**. An 8 KB window was
+  specced originally and is wrong here: that heuristic belongs to *streaming*
+  sniffers that haven't read the rest yet, whereas this buffer is the whole file
+  already, capped at `INLINE_MAX`. A late NUL slipped through into
+  `toString("utf8")` and came back corrupted with U+FFFD — silent corruption in
+  a feature whose premise is removing it. `tests/taskFileRoute.test.ts` pins it.
 
 #### `FileViewer` — `app/orchestrator/FileViewer.tsx` (new)
 
@@ -349,7 +359,7 @@ affordances read as clutter in practice, the fix is to omit them for `Read`.
 | `no-root` | `404` | "File is no longer available" |
 | `not-found` | `404` | "File is no longer available" |
 | `pruned` (workspace cleaned up, file not in the repo) | `404` | "This task's workspace was cleaned up, and the file wasn't merged into the repo" |
-| `not-a-file` | `404` | "That path is a directory" |
+| `not-a-file` (directory, FIFO, socket or device) | `404` | "That path isn't a regular file" |
 | `outside-root` | `404` | "This file is outside the task's workspace, so it can't be opened here" |
 | Over `DOWNLOAD_MAX` on a download request | `413` | "File is too large to download" |
 | Read fails (permissions, I/O) | `404` | "File is no longer available" |
@@ -401,7 +411,14 @@ is on a `Bash` call. It therefore cannot exercise `describeToolUse` or the
 driver hop. Adding `file` to the scripted event and its `toMatchObject` covers
 exactly one hop — `runner.ts:252` copying the field into `ToolData` — which is
 worth the one line, but must not be mistaken for end-to-end coverage of the
-nine edit points.
+eight edit points.
+
+**As built, `tests/taskFileRoute.test.ts` also exists** — the route turned out
+not to be pure glue. Size policy, binary detection and `Content-Disposition`
+construction live only there, so seven cases cover them: `disposition()` against
+`"`, `\` and CRLF; a NUL past the first 8 KB; the inline gate at both 512 KB and
+512 KB + 1 (either alone cannot distinguish `>` from `>=`); and the `download=1`
+round-trip. `disposition` is exported solely for that test.
 
 The repo runs vitest via `npm test`.
 

@@ -322,7 +322,11 @@ git commit -s -m "Resolve a task file path, refusing anything outside the worksp
 **Files:**
 - Create: `app/api/tasks/[id]/file/route.ts`
 
-No unit test: the route is thin glue over `resolveTaskFile` (tested) and `fs`. It is verified manually in Task 7.
+> **As built, this was wrong.** The route is thin glue only on its resolve-and-404
+> path; size policy, binary detection and `Content-Disposition` construction live
+> nowhere else. Review added `tests/taskFileRoute.test.ts` (7 cases) and exported
+> `disposition` for it — do not delete that export as unused. 413, the no-path 400
+> and the `fromRepoFallback` passthrough remain deliberately untested.
 
 - [ ] **Step 1: Implement**
 
@@ -344,7 +348,7 @@ const COPY: Record<string, string> = {
   "no-root": "File is no longer available.",
   "not-found": "File is no longer available.",
   pruned: "This task's workspace was cleaned up, and the file wasn't merged into the repo.",
-  "not-a-file": "That path is a directory.",
+  "not-a-file": "That path isn't a regular file.",
   "outside-root": "This file is outside the task's workspace, so it can't be opened here.",
 };
 
@@ -418,7 +422,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   } catch {
     return fail("not-found");
   }
-  if (buf.subarray(0, 8192).includes(0)) {
+  if (buf.includes(0)) {
     return NextResponse.json({ ...base, viewable: false, reason: "binary" });
   }
 

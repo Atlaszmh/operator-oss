@@ -68,7 +68,7 @@ function ToolView({ data, onOpenFile }: { data: ToolData; onOpenFile?: (path: st
           <span className="tg">{data.title}</span>
           {data.result !== undefined && <span className={data.isError ? "tx" : "tcheck"}>{data.isError ? Icon.x() : Icon.check()}</span>}
         </button>
-        {data.file && onOpenFile && (
+        {data.file && !data.isError && onOpenFile && (
           <button className="tool-file" title="Open file" aria-label="Open file" onClick={() => onOpenFile(data.file!)}>
             {Icon.doc()}
           </button>

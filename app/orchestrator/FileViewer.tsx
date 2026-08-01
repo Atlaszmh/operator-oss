@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
+import { fmtBytes } from "./format";
 import { Modal } from "./Modal";
 import { Skel } from "./shared";
 
@@ -16,9 +17,6 @@ interface FileData {
   content?: string;
 }
 
-const fmtSize = (n: number) =>
-  n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
-
 export function FileViewer({ taskId, path, onClose }: { taskId: string; path: string; onClose: () => void }) {
   const [data, setData] = useState<FileData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +28,8 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
 
   const src = `/api/tasks/${taskId}/file?path=${encodeURIComponent(path)}`;
 
-  // Plain fetch, not the jget helper: fail() throws only `error` and discards
-  // `reason`, which the states below switch on.
+  // Plain fetch rather than the jget helper: the download path below needs the raw
+  // Response to read a blob, so both calls use fetch for consistency.
   useEffect(() => {
     let live = true;
     setData(null);
@@ -102,13 +100,13 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
   // Ordered so the states are mutually exclusive: a file over DOWNLOAD_MAX is
   // both "too-large" and undownloadable, and the download verdict wins.
   const body = () => {
-    if (error) return <div className="hlp">{error}</div>;
+    if (error) return <div className="fv-note">{error}</div>;
     if (!data) return <Skel w="100%" h={140} />;
     if (!data.downloadable)
-      return <div className="hlp">This file is {fmtSize(data.size)} — too large to show or download from here. Use the project terminal.</div>;
+      return <div className="fv-note">This file is {fmtBytes(data.size)} — too large to show or download from here. Use the project terminal.</div>;
     if (!data.viewable && data.reason === "too-large")
-      return <div className="hlp">This file is {fmtSize(data.size)} — too large to show here. Download it instead.</div>;
-    if (!data.viewable) return <div className="hlp">This looks like a binary file. Download it instead.</div>;
+      return <div className="fv-note">This file is {fmtBytes(data.size)} — too large to show here. Download it instead.</div>;
+    if (!data.viewable) return <div className="fv-note">This looks like a binary file. Download it instead.</div>;
     // tabIndex makes the scroll box reachable by keyboard — only Firefox focuses
     // scroll containers on its own, so elsewhere a long file was unscrollable.
     return <pre ref={preRef} className="tool-pre" tabIndex={0} aria-label={data.name} style={{ maxHeight: "60vh", overflow: "auto" }}>{data.content}</pre>;
@@ -140,7 +138,7 @@ export function FileViewer({ taskId, path, onClose }: { taskId: string; path: st
       }
     >
       {body()}
-      {dlError && <div className="hlp" style={{ marginTop: 8 }}>{dlError}</div>}
+      {dlError && <div className="fv-note" style={{ marginTop: 8 }}>{dlError}</div>}
     </Modal>
   );
 }

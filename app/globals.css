@@ -821,6 +821,9 @@ a.tc-btn{display:inline-flex;align-items:center;text-decoration:none;line-height
    theme, so the row hover would already have painted it and nothing would read. */
 .tool-file:hover{color:var(--ink-2);background:var(--accent-soft);}
 .tool-file svg{width:13px;height:13px;}
+/* FileViewer's message states. Scoped rather than styling bare .hlp, which is
+   used unscoped by delete confirmations and the onboarding wizard. */
+.fv-note{font-size:11.5px;color:var(--ink-3);line-height:1.45;}
 /* The row owns the hover sweep, not .tool-h — .tool-h is now a shrunken flex box,
    so its own highlight would stop short of the file button. */
 .tool-row:hover{background:var(--panel-2);}
@@ -1084,7 +1087,6 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 .field input[type=number]::-webkit-outer-spin-button,.field input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .field input:focus,.field textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
 .field .ctx-mono{font-family:var(--mono);font-size:12.5px;}
-.hlp{font-size:11.5px;color:var(--ink-3);line-height:1.45;}
 .field .hlp{font-size:11.5px;color:var(--ink-3);margin-top:7px;line-height:1.45;}
 
 .seg{display:flex;gap:6px;}
