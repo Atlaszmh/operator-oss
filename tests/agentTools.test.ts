@@ -40,6 +40,32 @@ describe("agentTools shared logic", () => {
     expect(getTaskDeps(c.task.id)).toEqual([a.id]);
   });
 
+  it("persists a valid model and reasoning onto the suggested task", () => {
+    const project = createProject({ name: "Run" });
+    const { task, text } = createSuggestedTask(project, { title: "Fast one", description: "", model: "haiku", reasoning: "off" });
+    expect(getTask(task.id)).toMatchObject({ model: "haiku", reasoning: "off" });
+    // Nothing to correct, so no note.
+    expect(text).not.toContain("isn't available");
+  });
+
+  it("accepts any model in the descriptor, including untiered pins", () => {
+    const project = createProject({ name: "Pin" });
+    const { task } = createSuggestedTask(project, { title: "Pinned", description: "", model: "claude-opus-4-8" });
+    expect(getTask(task.id)!.model).toBe("claude-opus-4-8");
+  });
+
+  it("drops an unrecognised model to null and tells the agent so it self-corrects", () => {
+    const project = createProject({ name: "Bogus" });
+    const { task, text } = createSuggestedTask(project, { title: "Wrong", description: "", model: "gpt-5", reasoning: "galaxy-brain" });
+    const row = getTask(task.id)!;
+    expect(row.model).toBeNull();
+    expect(row.reasoning).toBeNull();
+    // The task is still created — a bad value must never cost the plan a task.
+    expect(row.title).toBe("Wrong");
+    expect(text).toContain('model "gpt-5" isn\'t available');
+    expect(text).toContain('reasoning "galaxy-brain" isn\'t available');
+  });
+
   it("resolveTitleRefs maps session titles to ids and passes ids through", () => {
     const map = new Map<string, string>([["First task", "id-1"]]);
     expect(resolveTitleRefs(["First task", "id-2"], map)).toEqual(["id-1", "id-2"]);

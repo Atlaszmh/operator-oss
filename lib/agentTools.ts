@@ -12,6 +12,7 @@
 import { nanoid } from "nanoid";
 import type { Project, Task, ServiceInfo, Priority, AskQuestion, ToolData } from "./types";
 import { createTask, setTaskDeps, addMessage, updateMessage, updateTask } from "./store";
+import { getCapabilities } from "./agents/capabilities";
 import { exposeService } from "./services";
 import { publish } from "./events";
 import { waitForAnswer, settleAsk } from "./asks";
@@ -35,6 +36,40 @@ export interface SuggestTaskInput {
   priority?: Priority;
   /** Already resolved to task ids (see resolveTitleRefs) — id passes through to setTaskDeps. */
   blocked_by?: string[];
+  /** Raw model / reasoning values from the agent — validated below, never trusted. */
+  model?: string;
+  reasoning?: string;
+}
+
+/**
+ * Check the run config an agent chose against the descriptor of the agent that
+ * will actually run the task. This is a trust boundary: both values are free
+ * text produced by a language model and land in a database write.
+ *
+ * An unrecognised value degrades to null (inherit) rather than throwing, and
+ * comes back as a note appended to the text the agent receives — which is the
+ * point. A planner that gets told its guess was wrong fixes the next of its
+ * twenty calls; one that gets a silent null repeats the mistake all twenty times.
+ *
+ * Anything in the descriptor is accepted, including untiered options: `tier`
+ * governs what the guidance OFFERS, not what the tool ALLOWS. Rejecting a pinned
+ * model an agent named correctly would make the accepted set differ from the
+ * human picker's for no benefit.
+ */
+function validateRun(agent: string | null | undefined, input: SuggestTaskInput): { model: string | null; reasoning: string | null; note: string } {
+  const caps = getCapabilities(agent);
+  const notes: string[] = [];
+  const pick = (kind: string, raw: string | undefined, allowed: string[]): string | null => {
+    if (!raw) return null;
+    if (allowed.includes(raw)) return raw;
+    notes.push(`${kind} "${raw}" isn't available for this project's agent — using the default.`);
+    return null;
+  };
+  return {
+    model: pick("model", input.model, caps.models.map((m) => m.value)),
+    reasoning: pick("reasoning", input.reasoning, caps.reasoningOptions.map((r) => r.value)),
+    note: notes.length ? ` (${notes.join(" ")})` : "",
+  };
 }
 
 /**
@@ -45,12 +80,17 @@ export interface SuggestTaskInput {
  * rejects cycles).
  */
 export function createSuggestedTask(project: Project, input: SuggestTaskInput): { task: Task; text: string } {
+  // The task's agent is projects.default_agent (suggest_task never sets one, so
+  // createTask falls back to it) — validate against that agent's descriptor.
+  const run = validateRun(project.default_agent, input);
   const task = createTask({
     project_id: project.id,
     title: input.title,
     description: input.description,
     priority: input.priority ?? "med",
     suggested: true,
+    model: run.model,
+    reasoning: run.reasoning,
   });
   let depNote = "";
   if (input.blocked_by?.length) {
@@ -63,7 +103,7 @@ export function createSuggestedTask(project: Project, input: SuggestTaskInput): 
   }
   return {
     task,
-    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${depNote}`,
+    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${depNote}${run.note}`,
   };
 }
 
