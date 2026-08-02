@@ -76,6 +76,12 @@ export function init(db: Database.Database) {
       branch      TEXT NOT NULL DEFAULT '',
       base_sha    TEXT NOT NULL DEFAULT '',
       merged_at   INTEGER NOT NULL DEFAULT 0,
+      -- Autopilot: 1 = this feature's approved plan runs unattended (see
+      -- lib/autopilot.ts). 0 is the pre-autopilot behaviour, byte for byte.
+      -- pr_url is the integration branch's open PR — set = awaiting the user's
+      -- review, which is the terminal state autopilot drives toward.
+      autopilot   INTEGER NOT NULL DEFAULT 0,
+      pr_url      TEXT NOT NULL DEFAULT '',
       archived    INTEGER NOT NULL DEFAULT 0,
       position    INTEGER NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL,
@@ -114,6 +120,11 @@ export function init(db: Database.Database) {
       -- by the agent (see extractOutcome in lib/agents/shared.ts). '' = never
       -- reported. Latest report wins; it's a headline, not a history.
       outcome       TEXT NOT NULL DEFAULT '',
+      -- Autopilot gate bookkeeping. gate_attempts counts consumed retries of the
+      -- tests+review gate; blocked_reason ('' = not blocked) is why autopilot
+      -- stopped touching this task, and is cleared by any human message.
+      gate_attempts  INTEGER NOT NULL DEFAULT 0,
+      blocked_reason TEXT NOT NULL DEFAULT '',
       generation  INTEGER NOT NULL DEFAULT 1,
       started     INTEGER NOT NULL DEFAULT 0,
       running     INTEGER NOT NULL DEFAULT 0,
@@ -383,6 +394,15 @@ export function migrate(db: Database.Database) {
   if (!taskCols.includes("pr_url")) db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
   // The agent's business-facing outcome line ("" = not reported yet).
   if (!taskCols.includes("outcome")) db.exec("ALTER TABLE tasks ADD COLUMN outcome TEXT NOT NULL DEFAULT ''");
+  // Autopilot's per-task gate bookkeeping (lib/autopilot.ts + lib/gates.ts).
+  if (!taskCols.includes("gate_attempts")) db.exec("ALTER TABLE tasks ADD COLUMN gate_attempts INTEGER NOT NULL DEFAULT 0");
+  if (!taskCols.includes("blocked_reason")) db.exec("ALTER TABLE tasks ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''");
+  // Autopilot columns on features (added after the feature layer shipped). The
+  // features table itself is CREATE IF NOT EXISTS, so only these two need a
+  // migration entry — an older DB has the table but not the columns.
+  const featureCols = (db.prepare("PRAGMA table_info(features)").all() as { name: string }[]).map((c) => c.name);
+  if (!featureCols.includes("autopilot")) db.exec("ALTER TABLE features ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0");
+  if (!featureCols.includes("pr_url")) db.exec("ALTER TABLE features ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
   // The optional feature this task belongs to (NULL = ungrouped, which is what
   // every pre-feature task is). SQLite requires a NULL default when adding a
   // column with a REFERENCES clause, which is exactly what we want anyway.

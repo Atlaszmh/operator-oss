@@ -45,6 +45,10 @@ export interface Feature {
   branch: string; // integration branch ("" = members use projects.branch as today)
   base_sha: string; // commit the integration branch forked from
   merged_at: number; // when the integration branch landed on projects.branch (0 = not yet)
+  autopilot: number; // 1 = the approved plan runs unattended (see lib/autopilot.ts)
+  // The integration branch's open PR ("" = none). Set = autopilot has finished
+  // and the feature is sitting on the user's review — its terminal state.
+  pr_url: string;
   archived: number; // 1 = hidden from the working set, restorable (mirrors projects.deprecated)
   position: number; // manual order within the project (ascending)
   created_at: number;
@@ -59,6 +63,7 @@ export interface FeatureWithCounts extends Feature {
   done: number; // members with status 'done'
   suggested_count: number; // members still in the suggested tray
   awaiting_count: number; // members waiting on the user right now
+  blocked_count: number; // members autopilot escalated and stopped working
 }
 
 export interface Task {
@@ -86,6 +91,8 @@ export interface Task {
   // Deliberately business-facing: no file names, no implementation detail — it's
   // the line you read off the task card instead of opening the transcript.
   outcome: string;
+  gate_attempts: number; // consumed autopilot gate retries (reset by any human message)
+  blocked_reason: string; // why autopilot stopped working this task ("" = not blocked)
   generation: number; // increments on each /clear
   position: number; // manual order within the project (list groups + board columns, ascending)
   started: number; // 1 once the initial prompt has been sent
@@ -333,6 +340,16 @@ export interface ToolData {
 // object, and building it twice means a new field can be added to one and
 // forgotten in the other — links that appear only after a reload. Shared so
 // that failure mode can't exist.
+// One gate decision for a task (lib/gates.ts): did it earn an unattended merge?
+// `feedback` is what gets sent back to the agent when it didn't, so it's phrased
+// as instructions to the engineer, not as a report about them.
+export interface GateVerdict {
+  ok: boolean;
+  feedback: string;
+  testsRan: boolean; // false = the project has no test_command, so nothing proved it runs
+  reviewRan: boolean; // false = short-circuited by a red suite
+}
+
 export const toolData = (ev: Extract<StreamEvent, { type: "tool" }>): ToolData => ({
   title: ev.title,
   detail: ev.detail,

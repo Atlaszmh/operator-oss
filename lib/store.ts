@@ -257,14 +257,16 @@ export function listFeatures(projectId: string): FeatureWithCounts[] {
          COALESCE(c.total, 0)           AS total,
          COALESCE(c.done, 0)            AS done,
          COALESCE(c.suggested_count, 0) AS suggested_count,
-         COALESCE(c.awaiting_count, 0)  AS awaiting_count
+         COALESCE(c.awaiting_count, 0)  AS awaiting_count,
+         COALESCE(c.blocked_count, 0)   AS blocked_count
        FROM features f
        LEFT JOIN (
          SELECT feature_id,
            SUM(CASE WHEN suggested = 0 AND status != 'cancelled' THEN 1 ELSE 0 END) AS total,
            SUM(CASE WHEN suggested = 0 AND status  = 'done'      THEN 1 ELSE 0 END) AS done,
            SUM(CASE WHEN suggested = 1                           THEN 1 ELSE 0 END) AS suggested_count,
-           SUM(CASE WHEN status = 'in_progress' AND awaiting_input = 1 THEN 1 ELSE 0 END) AS awaiting_count
+           SUM(CASE WHEN status = 'in_progress' AND awaiting_input = 1 THEN 1 ELSE 0 END) AS awaiting_count,
+           SUM(CASE WHEN blocked_reason != ''                        THEN 1 ELSE 0 END) AS blocked_count
          FROM tasks WHERE feature_id IS NOT NULL GROUP BY feature_id
        ) c ON c.feature_id = f.id
        WHERE f.project_id = ?
@@ -319,9 +321,9 @@ export function updateFeature(id: string, patch: Partial<Omit<Feature, "id" | "p
   const n = { ...cur, ...patch, updated_at: Date.now() };
   getDb()
     .prepare(
-      `UPDATE features SET name=?, description=?, context=?, color=?, branch=?, base_sha=?, merged_at=?, archived=?, position=?, updated_at=? WHERE id=?`
+      `UPDATE features SET name=?, description=?, context=?, color=?, branch=?, base_sha=?, merged_at=?, autopilot=?, pr_url=?, archived=?, position=?, updated_at=? WHERE id=?`
     )
-    .run(n.name.trim(), n.description, n.context, n.color, n.branch, n.base_sha, n.merged_at, n.archived, n.position, n.updated_at, id);
+    .run(n.name.trim(), n.description, n.context, n.color, n.branch, n.base_sha, n.merged_at, n.autopilot ?? 0, n.pr_url ?? "", n.archived, n.position, n.updated_at, id);
   return getFeature(id);
 }
 
@@ -364,6 +366,44 @@ export function featureUnfinishedTasks(featureId: string): { id: string; title: 
   return getDb()
     .prepare("SELECT id, title FROM tasks WHERE feature_id = ? AND suggested = 0 AND status NOT IN ('done', 'cancelled')")
     .all(featureId) as { id: string; title: string }[];
+}
+
+// Every task filed under a feature, in the project's manual order. Autopilot's
+// unit of work — it never looks at ungrouped tasks, because an approved plan is
+// always a feature.
+export function featureMembers(featureId: string): Task[] {
+  return getDb()
+    .prepare("SELECT * FROM tasks WHERE feature_id = ? ORDER BY position ASC, created_at ASC")
+    .all(featureId) as Task[];
+}
+
+/**
+ * Members autopilot may start right now: committed (not suggested), not already
+ * running, not escalated, not finished or parked, and with every dependency done.
+ *
+ * The dependency filter is the first consumer `task_dependencies` has ever had.
+ * The graph was always writable — `suggest_task({blocked_by})` fills it in and
+ * the UI renders it as a badge — but nothing ever scheduled off it, so ordering a
+ * planner expressed was ordering the user still had to execute by hand.
+ *
+ * A dep that doesn't resolve to a done member counts as unmet, which covers the
+ * impossible cases safely: setTaskDeps refuses foreign ids on write and the
+ * cascade clears them on delete, so an unresolvable dep should never exist — and
+ * if one does, refusing to start is the right failure direction.
+ */
+export function readyMembers(featureId: string): Task[] {
+  const members = featureMembers(featureId);
+  const done = new Set(members.filter((t) => t.status === "done").map((t) => t.id));
+  return members.filter(
+    (t) =>
+      !t.suggested &&
+      !t.running &&
+      !t.blocked_reason &&
+      t.status !== "done" &&
+      t.status !== "cancelled" &&
+      t.status !== "on_hold" &&
+      getTaskDeps(t.id).every((id) => done.has(id))
+  );
 }
 
 // The task ids a given task is blocked by.
@@ -473,9 +513,9 @@ export function updateTask(id: string, patch: Partial<Task>): Task | undefined {
   getDb()
     .prepare(
       `UPDATE tasks SET feature_id=?, title=?, description=?, priority=?, status=?, suggested=?, agent=?, model=?, resolved_model=?, reasoning=?, permission_mode=?,
-        session_id=?, worktree_path=?, work_branch=?, base_sha=?, merged_at=?, pr_url=?, outcome=?, generation=?, started=?, running=?, awaiting_input=?, updated_at=? WHERE id=?`
+        session_id=?, worktree_path=?, work_branch=?, base_sha=?, merged_at=?, pr_url=?, outcome=?, gate_attempts=?, blocked_reason=?, generation=?, started=?, running=?, awaiting_input=?, updated_at=? WHERE id=?`
     )
-    .run(n.feature_id ?? null, n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.outcome ?? "", n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
+    .run(n.feature_id ?? null, n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.outcome ?? "", n.gate_attempts ?? 0, n.blocked_reason ?? "", n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
   return getTask(id);
 }
 
