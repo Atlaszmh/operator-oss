@@ -42,7 +42,7 @@ Only the SELECTED task has a transcript stream open. Everything else stays live 
 Three things a feature owns, each independently optional:
 
 - **Shared context.** `features.context` is emitted by `buildProjectContext()` between the project context and the task framing. It lands in *every turn of every member task*, so it is spec-sized by convention, not by enforcement.
-- **An integration branch.** `features.branch` (`''` = off). When set, member tasks base off and merge into it instead of `projects.branch`, and the feature lands on the project branch as one unit. **`taskBaseBranch(task, project)` in `lib/store.ts` is THE resolution point** — every merge/sync/PR/worktree path routes through it, so a caller that forgets features can't exist. `ensureWorktree(repo, taskId, baseBranch?)` takes the fork point (absent/unknown → HEAD, which is what it always did).
+- **An integration branch.** `features.branch` (`''` = off). When set, member tasks base off and merge into it instead of `projects.branch`, and the feature lands on the project branch as one unit. **`taskBaseBranch(task, project)` in `lib/store.ts` is THE resolution point** — every merge/sync/PR/worktree path routes through it, so a caller that forgets features can't exist. `ensureWorktree(repo, taskId, baseBranch?)` already took a fork point (absent/unknown → HEAD); features only changed what gets passed to it — `taskBaseBranch(task, project)` instead of `project.branch`.
 - **Agent planning.** `suggest_feature` (upsert by name) + `suggest_task({feature})` (unknown name auto-creates, because a planner that gets twenty errors files nothing). Both mount paths share `lib/agentTools.ts`, same split as `suggest_task`.
 
 Two deliberate departures worth knowing before you "fix" them:

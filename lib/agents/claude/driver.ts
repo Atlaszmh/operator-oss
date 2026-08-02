@@ -16,6 +16,7 @@ import { createSuggestedTask, createSuggestedFeature, registerExposedService, re
 import { SUGGEST_TASK, SUGGEST_FEATURE, EXPOSE_SERVICE } from "../../agentToolDefs.mjs";
 import { waitForAnswer } from "../../asks";
 import { CLAUDE_CLI_PATH as CLAUDE_PATH } from "../../config";
+import { isUsageLimit } from "../../usageLimit";
 import { hasApiKey, looksLikeApiKey, setApiKey, clearApiKey } from "../../anthropic-key";
 import {
   buildProjectContext,
@@ -158,6 +159,20 @@ async function* runTurn(
   // tool_use id -> how to summarize its eventual result into a peek.
   const resultKinds = new Map<string, ResultKind>();
   const queue = makeQueue<StreamEvent>();
+  // Latest usage-limit reset time the SDK reported this turn (rate_limit_event,
+  // for claude.ai subscription users). When the turn then dies on a usage-limit
+  // error, the raw error text usually says WHAT happened but not WHEN it heals —
+  // this timestamp does, so withResetTime() folds it into the error event and it
+  // lands in the persisted transcript line (the durable channel the UI renders).
+  let limitResetsAt: number | null = null;
+  // Append the reset time to a usage-limit error's text, human-readably. The
+  // SDK reports `resetsAt` as a unix timestamp — epoch seconds in practice, but
+  // tolerate milliseconds defensively (values past ~2001 in ms terms).
+  const withResetTime = (text: string): string => {
+    if (limitResetsAt == null || !isUsageLimit(text)) return text;
+    const ms = limitResetsAt > 1e12 ? limitResetsAt : limitResetsAt * 1000;
+    return `${text} — resets at ${new Date(ms).toLocaleString()}`;
+  };
 
   // Resolve the run controls with a two-level fallback: the task's own choice wins;
   // when it's null ("Default"), inherit the app-level default set in Settings; when
@@ -297,6 +312,10 @@ async function* runTurn(
           // so recordRateLimit keeps one snapshot per window for Insights.
           const info = (message as { rate_limit_info?: RateLimitSnapshot }).rate_limit_info;
           if (info) recordRateLimit(info);
+          // The same event is also the only place the reset time is available,
+          // so remember it for the usage-limit failure message below — that
+          // needs to say when the quota heals, not just that it was hit.
+          if (typeof info?.resetsAt === "number") limitResetsAt = info.resetsAt;
         } else if (message.type === "result") {
           // Per-turn spend: the result message carries this turn's dollar cost
           // and token counts. Persisted by the consumer for cumulative totals.
@@ -312,7 +331,7 @@ async function* runTurn(
             },
           });
           if (message.subtype !== "success" && "result" in message === false) {
-            queue.push({ type: "error", content: `Run ended: ${message.subtype}` });
+            queue.push({ type: "error", content: withResetTime(`Run ended: ${message.subtype}`) });
           }
         }
       }
@@ -320,7 +339,7 @@ async function* runTurn(
       // An abort (Stop button / disconnect) ends the stream deliberately — not an
       // error. The partial transcript is already persisted by the consumer.
       if (!abortController?.signal.aborted) {
-        queue.push({ type: "error", content: err instanceof Error ? err.message : String(err) });
+        queue.push({ type: "error", content: withResetTime(err instanceof Error ? err.message : String(err)) });
       }
     } finally {
       queue.close();

@@ -10,13 +10,22 @@ import type { Project, Task, Feature, FeatureWithCounts, Message, PendingMessage
 
 // ---------- projects ----------
 
+// The single "needs you" predicate (over tasks aliased `t`): a real task,
+// in progress, flagged awaiting_input. Deliberately NO running condition — a
+// turn parked mid-stream on an AskUserQuestion has running=1 AND
+// awaiting_input=1 and needs the user exactly as much as a settled one (the
+// client-side isAwaiting in app/orchestrator/format.ts makes the same call).
+// Shared by listProjects' awaiting_count subquery, listNeedsYou, and
+// countAwaiting so the project badges, the titlebar "N need you" pill, and its
+// dropdown can never disagree.
+const NEEDS_YOU = "t.suggested = 0 AND t.status = 'in_progress' AND t.awaiting_input = 1";
+
 export function listProjects(): (Project & { task_count: number; last_activity: number; awaiting_count: number; cost_usd: number })[] {
   return getDb()
     .prepare(
       `SELECT p.*,
          (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.suggested = 0) AS task_count,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.suggested = 0
-            AND t.status = 'in_progress' AND t.awaiting_input = 1) AS awaiting_count,
+         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND ${NEEDS_YOU}) AS awaiting_count,
          COALESCE((SELECT SUM(u.cost_usd) FROM task_usage u WHERE u.project_id = p.id), 0) AS cost_usd,
          (SELECT MAX(ts) FROM (
             SELECT MAX(updated_at) AS ts FROM tasks WHERE project_id = p.id
@@ -47,8 +56,9 @@ export function listRunningTaskIds(): string[] {
   ).map((r) => r.id);
 }
 
-// Every task across all active projects that's waiting on the user (in_progress,
-// flagged awaiting_input, not currently streaming) — the rows behind the titlebar
+// Every task across all active projects that's waiting on the user (the shared
+// NEEDS_YOU predicate: in_progress with awaiting_input set — including a turn
+// still live but parked on an AskUserQuestion) — the rows behind the titlebar
 // "N need you" dropdown. `waiting_since` is when Claude last spoke (its final
 // message of the paused turn), falling back to the task's updated_at when a task
 // is awaiting with no messages yet; the UI renders it as "waiting for <duration>".
@@ -69,22 +79,19 @@ export function listNeedsYou(): {
          COALESCE((SELECT MAX(m.created_at) FROM messages m WHERE m.task_id = t.id), t.updated_at) AS waiting_since
        FROM tasks t
        JOIN projects p ON p.id = t.project_id
-       WHERE t.suggested = 0 AND p.deprecated = 0
-         AND t.status = 'in_progress' AND t.awaiting_input = 1 AND t.running = 0
+       WHERE ${NEEDS_YOU} AND p.deprecated = 0
        ORDER BY waiting_since ASC`
     )
     .all() as ReturnType<typeof listNeedsYou>;
 }
 
-// One project's awaiting count (same predicate as listProjects' awaiting_count
-// subquery) — recomputed per lifecycle event for the global /api/events stream
-// so clients can patch the project badge without refetching the project list.
+// One project's awaiting count (the shared NEEDS_YOU predicate, same as
+// listProjects' awaiting_count subquery and listNeedsYou's rows) — recomputed
+// per lifecycle event for the global /api/events stream so clients can patch
+// the project badge without refetching the project list.
 export function countAwaiting(projectId: string): number {
   const row = getDb()
-    .prepare(
-      `SELECT COUNT(*) AS n FROM tasks
-       WHERE project_id = ? AND suggested = 0 AND status = 'in_progress' AND awaiting_input = 1`
-    )
+    .prepare(`SELECT COUNT(*) AS n FROM tasks t WHERE t.project_id = ? AND ${NEEDS_YOU}`)
     .get(projectId) as { n: number };
   return row.n;
 }

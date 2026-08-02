@@ -112,6 +112,16 @@ function TaskHero({ task, project, onStart, onEdit, running, blockedBy }: { task
   );
 }
 
+// Ref-backed identity-stable wrapper: Orchestrator passes fresh inline handlers
+// on every render, which would defeat MessageView's memo — the wrapper keeps one
+// function identity for the component's lifetime while always invoking the
+// latest handler.
+function useStableHandler<A extends unknown[]>(fn?: (...args: A) => void): (...args: A) => void {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: A) => { ref.current?.(...args); }, []);
+}
+
 export function SessionView({ project, task, agents, messages, running, blockedBy, transcriptLoading, onSend, onStart, onStop, onClear, onEdit, onReconnect, onSetStatus, onSetPriority, onSetModel, onSetReasoning, onSetPermission, onResolveWithAI, onMerged, onPrCreated, onAnswer, onCancelQueued, onBack, mobile, railW, onRailWidth, onRailReset, railCollapsed, onRailCollapse, onRailExpand }: {
   project: ProjectRow; task: TaskRow; agents: AgentsBundle; messages: Msg[]; running: boolean; blockedBy?: string[]; transcriptLoading?: boolean;
   onSend: (t: string) => void; onStart: () => void; onStop: () => void; onClear: () => void; onEdit: () => void;
@@ -138,6 +148,10 @@ export function SessionView({ project, task, agents, messages, running, blockedB
   const sessions = useMemo(() => buildSessions(messages), [messages]);
   const hasSession = task.started === 1 || messages.length > 0;
   const awaiting = isAwaiting(task);
+  const stableAnswer = useStableHandler(onAnswer);
+  const stableCancelQueued = useStableHandler(onCancelQueued);
+  const stableClear = useStableHandler(onClear);
+  const stableReconnect = useStableHandler(onReconnect);
   // Run-control pickers + feature gates come from this task's agent capabilities,
   // never a hardcoded list — so the options always match the agent it runs under.
   const caps = capsFor(agents, task.agent);
@@ -247,7 +261,7 @@ export function SessionView({ project, task, agents, messages, running, blockedB
                 const prev = s.messages[mi - 1];
                 // collapse the repeated "Claude Code" header across an assistant run (text → tool → text)
                 const hideWho = m.role === "assistant" && !!prev && (prev.role === "assistant" || prev.role === "tool");
-                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agent={task.agent} agentLabel={agentLabel(agents, task.agent)} onAnswer={onAnswer} onCancelQueued={onCancelQueued} onClear={onClear} onReconnect={onReconnect} onOpenFile={setFilePath} />;
+                return <MessageView key={m.id} m={m} initial={mi === 0 && m.role === "user"} hideWho={hideWho} running={running} agent={task.agent} agentLabel={agentLabel(agents, task.agent)} onAnswer={stableAnswer} onCancelQueued={stableCancelQueued} onClear={stableClear} onReconnect={stableReconnect} onOpenFile={setFilePath} />;
               })}
             </div>
           ))}
@@ -257,7 +271,7 @@ export function SessionView({ project, task, agents, messages, running, blockedB
           {/* Follow-ups queued mid-turn, pinned below the live turn — they
               send in order once it ends. */}
           {messages.filter((m) => m.role === "queued").map((m) => (
-            <MessageView key={m.id} m={m} initial={false} hideWho={false} onAnswer={onAnswer} onCancelQueued={onCancelQueued} />
+            <MessageView key={m.id} m={m} initial={false} hideWho={false} onAnswer={stableAnswer} onCancelQueued={stableCancelQueued} />
           ))}
         </div>
       </div>

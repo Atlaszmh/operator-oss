@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask, deleteTask, listMessages, getTaskUsage, getTaskContext, getTaskDeps, setTaskDeps, findFeature } from "@/lib/store";
+import { getTask, getProject, updateTask, deleteTask, listMessages, getTaskUsage, getTaskContext, getTaskDeps, setTaskDeps, findFeature, countAwaiting } from "@/lib/store";
 import { removeWorktree } from "@/lib/git";
 import { removeTaskUploads } from "@/lib/uploads";
 import { abortTurn } from "@/lib/abort";
+import { publishGlobal } from "@/lib/events";
 import type { Task } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +57,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
   const task = updateTask(id, allowed);
   if (!task) return NextResponse.json({ error: "not found" }, { status: 404 });
+  // A manual status change settles status + awaiting_input outside any turn, so
+  // no runner publish will follow — announce it ourselves or every other tab's
+  // "needs you" badges keep counting this task until their next reconnect.
+  if ("status" in allowed) publishGlobal(id, { type: "task_updated" });
   return NextResponse.json({ ...task, depends_on: getTaskDeps(id) });
 }
 
@@ -71,5 +76,10 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   }
   removeTaskUploads(id);
   deleteTask(id);
+  // Publish AFTER the hard delete, carrying the project id + its recomputed
+  // awaiting count: the row is gone, so /api/events' usual re-read-the-task
+  // enrichment would drop the event and freeze the project's badge in every
+  // other tab until the next SSE reconnect.
+  if (task) publishGlobal(id, { type: "task_deleted", projectId: task.project_id, awaiting_count: countAwaiting(task.project_id) });
   return NextResponse.json({ ok: true });
 }

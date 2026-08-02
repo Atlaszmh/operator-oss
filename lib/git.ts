@@ -95,23 +95,18 @@ export async function recentCommits(repoPath: string, n = 10): Promise<string> {
 }
 
 /**
- * Create an isolated git worktree + branch for a task, branched from the repo's
- * current HEAD. Returns the worktree path and branch, or `null` when isolation
- * isn't possible (not a git repo, or no commits yet) — the caller then falls
- * back to running directly in the project's repo path.
- */
-/**
- * Cut (or reuse) a task's isolated worktree.
+ * Create an isolated git worktree + branch for a task, branched from
+ * `baseBranch` when it exists, else from the repo's current HEAD. Basing off the
+ * configured branch matters: `mergeTask` lands the task INTO that branch, so
+ * branching from whatever the main checkout happens to have checked out would
+ * make tasks base off one branch and merge into another. Returns the worktree
+ * path and branch, or `null` when isolation isn't possible (not a git repo, or
+ * no commits yet) — the caller then falls back to running directly in the
+ * project's repo path.
  *
- * `baseBranch` is the branch the new worktree forks from — a feature's
- * integration branch when the task belongs to one, else the project branch.
- * When it's absent or names a branch that doesn't exist, we fall back to the
- * repo's HEAD, which is what this did unconditionally before features existed
- * and is what keeps greenfield/commitless repos working.
- *
- * Passing it also fixes a pre-existing inconsistency: base_sha came from HEAD
- * while the merge target came from the project branch, so a repo sitting on some
- * other branch produced a task whose diff base and merge target disagreed.
+ * `baseBranch` is resolved by the caller, not assumed to be the project's: a
+ * task in a feature that owns an integration branch forks from THAT instead.
+ * See `taskBaseBranch` in lib/store.ts, which is the single resolution point.
  */
 export async function ensureWorktree(
   repoPath: string,
@@ -139,19 +134,20 @@ async function ensureWorktreeLocked(
 
   const wtPath = path.join(WORKTREES_DIR, taskId);
   const branch = branchForTask(taskId);
-  // Fork point: the requested base branch when it actually exists, else HEAD.
-  // The existence check matters — a project configured for a branch that hasn't
-  // been created yet must still get a worktree, not an error.
-  const startPoint = baseBranch && (await branchExists(repoPath, baseBranch)) ? baseBranch : "HEAD";
+  // Start point: the configured base branch if it exists, else current HEAD.
+  // The fallback must stay — a freshly-initialized repo may have an unborn or
+  // differently-named default branch, and a misconfigured project shouldn't
+  // block task isolation entirely.
+  const start = baseBranch && (await branchExists(repoPath, baseBranch)) ? baseBranch : "";
   // The commit the task branches from — the stable base for diff + merge.
-  const baseSha = await git(repoPath, ["rev-parse", startPoint]);
+  const baseSha = await git(repoPath, ["rev-parse", start || "HEAD"]);
   fs.mkdirSync(WORKTREES_DIR, { recursive: true });
 
   // Already linked (e.g. retry after a failed first launch) — reuse it.
   if (fs.existsSync(wtPath)) return { path: wtPath, branch, baseSha };
 
   try {
-    await git(repoPath, ["worktree", "add", "-b", branch, wtPath, startPoint]);
+    await git(repoPath, ["worktree", "add", "-b", branch, wtPath, ...(start ? [start] : [])]);
   } catch {
     // Branch may already exist from a prior generation; attach to it instead.
     await git(repoPath, ["worktree", "add", wtPath, branch]);

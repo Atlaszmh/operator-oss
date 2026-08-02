@@ -251,6 +251,16 @@ sitting on a different branch produces a task whose diff base and merge target
 disagree. Passing the resolved base branch fixes that for every task, feature or
 not.
 
+> **Correction, 2026-08-02.** The paragraph above was true when this was
+> written, but is no longer. `49a7246` on `main` ("Base task worktrees on the
+> project's configured branch, not HEAD") had already made the same change,
+> independently and with its own tests — this design was drafted from a branch
+> cut before it. On merge, that commit's implementation was kept and this
+> feature's contribution narrowed to what it actually adds: the base branch
+> passed in is `taskBaseBranch(task, project)` rather than `project.branch`, so
+> a task in a feature that owns an integration branch forks from that branch.
+> The HEAD-vs-`project.branch` inconsistency was already fixed.
+
 #### 3.3 Creating and shipping a feature branch
 
 **Create.** Setting a feature's branch creates it from the project branch and

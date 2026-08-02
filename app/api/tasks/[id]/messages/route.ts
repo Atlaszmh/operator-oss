@@ -104,6 +104,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           // Fork from the task's OWN base — its feature's integration branch
           // when it belongs to one, else the project branch. This is the only
           // place a worktree is cut, so it's the only place that needs to know.
+          // (taskBaseBranch returns project.branch for a task with no feature,
+          // so this is a superset of the plain project.branch it replaces.)
           const wt = await ensureWorktree(project.repo_path, fresh.id, taskBaseBranch(fresh, project));
           if (wt) {
             fresh.worktree_path = wt.path;
