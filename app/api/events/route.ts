@@ -1,6 +1,7 @@
 import { getTask, countAwaiting } from "@/lib/store";
 import { subscribeGlobal, type BusEvent, type GlobalTaskWireEvent, type GlobalWireEvent } from "@/lib/events";
 import { sseOpened, sseClosed } from "@/lib/idle";
+import { ensureAutopilot } from "@/lib/autopilot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -53,6 +54,12 @@ function coarse(ev: BusEvent): GlobalTaskWireEvent["event"] | null {
  * missed while disconnected are gone; this stream is a live tail only).
  */
 export async function GET(req: Request) {
+  // Arm the autopilot controller. This stream opens on every page load, so it's
+  // the earliest reliable moment after a server boot to attach the turn_end
+  // subscription an in-flight queue is driven by. Idempotent and cheap; there's
+  // no boot hook to use instead (server.js is plain CommonJS and can't import TS).
+  ensureAutopilot();
+
   const encoder = new TextEncoder();
   let cleanup = () => {};
   const stream = new ReadableStream({

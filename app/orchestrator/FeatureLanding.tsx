@@ -5,6 +5,7 @@ import { Icon } from "../icons";
 import { jget, jsend } from "./api";
 import { isAwaiting, relTime } from "./format";
 import { ErrNote, LoadNote, StatusDot } from "./shared";
+import { clientFeatures } from "@/lib/features";
 import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type TaskRow } from "./types";
 
 // The feature page — what fills the session column when a feature is open and
@@ -113,6 +114,8 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
             </div>
           )}
 
+          <AutopilotPanel feature={feature} project={project} tasks={tasks} onRefresh={onRefresh} />
+
           <FeatureBranchPanel feature={feature} project={project} onRefresh={onRefresh} />
 
           <div className="feat-sect">
@@ -138,6 +141,9 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
                       <span className="ft-time">{relTime(t.updated_at)}</span>
                     </div>
                     {t.outcome && <div className="ft-outcome">{t.outcome}</div>}
+                    {/* The escalation itself, not a link to go find it: this is
+                        the one thing the user is actually being asked to act on. */}
+                    {t.blocked_reason && <div className="ft-blocked">{Icon.clock()} {t.blocked_reason}</div>}
                   </button>
                 ))}
               </div>
@@ -169,6 +175,121 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Autopilot: the two gates, and everything between them reduced to a status line.
+ *
+ * Off  → "Approve plan", which accepts every suggestion, cuts the integration
+ *        branch if the feature hasn't got one, and starts the queue.
+ * On   → what it's doing, plus Pause. Pausing stops it starting anything new;
+ *        a turn already in flight is the Stop button's business, not this one's.
+ * PR   → the terminal state. The remaining work is on GitHub, so the panel's
+ *        job is to get out of the way and link to it.
+ */
+function AutopilotPanel({ feature, project, tasks, onRefresh }: {
+  feature: FeatureRow;
+  project: ProjectRow;
+  tasks: TaskRow[];
+  onRefresh: () => void;
+}) {
+  const [busy, setBusy] = useState<"" | "approve" | "pause" | "pr">("");
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!clientFeatures().autopilot) return null;
+
+  const act = async (kind: "approve" | "pause" | "pr") => {
+    setBusy(kind);
+    setErr(null);
+    try {
+      if (kind === "approve") await jsend(`/api/features/${feature.id}/approve-plan`, "POST");
+      else if (kind === "pr") await jsend(`/api/features/${feature.id}/pr`, "POST");
+      else await jsend(`/api/features/${feature.id}`, "PATCH", { autopilot: 0 });
+      onRefresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const blocked = tasks.filter((t) => t.blocked_reason);
+  const running = tasks.filter((t) => t.running);
+  const remaining = tasks.filter((t) => t.suggested === 0 && t.status !== "done" && t.status !== "cancelled");
+
+  if (feature.pr_url) {
+    return (
+      <div className="feat-sect">
+        <div className="feat-sect-h">Autopilot {Icon.check()} finished</div>
+        <div className="feat-branch-off">
+          <div className="fb-copy">
+            Every task in this feature passed its gate and landed on <code>{feature.branch}</code>. The branch is pushed
+            and the PR is open against <code>{project.branch}</code> — reviewing and merging it is the last step, and it&apos;s yours.
+          </div>
+          <a className="btn btn-accent btn-sm" href={feature.pr_url} target="_blank" rel="noreferrer">
+            {Icon.git()} Review the pull request
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (!feature.autopilot) {
+    return (
+      <div className="feat-sect">
+        <div className="feat-sect-h">
+          Autopilot
+          <span className="feat-hint">Approve the plan once; the tasks run, gate themselves, and come back as one PR.</span>
+        </div>
+        <div className="feat-branch-off">
+          <div className="fb-copy">
+            Approving accepts {feature.suggested_count > 0 ? `all ${feature.suggested_count} suggested task${feature.suggested_count === 1 ? "" : "s"}` : "this plan"}
+            {!feature.branch && <> and gives the feature its own integration branch off <code>{project.branch}</code></>}, then
+            starts working through {tasks.length} task{tasks.length === 1 ? "" : "s"} in dependency order. Each one has to pass the
+            project&apos;s tests and an independent review before it merges. You&apos;ll be pulled back in only if something gets stuck —
+            and again at the end, to merge the PR.
+          </div>
+          <button className="btn btn-accent btn-sm" disabled={!!busy || tasks.length === 0} onClick={() => void act("approve")}>
+            {Icon.play()} {busy === "approve" ? "Starting…" : "Approve plan & start"}
+          </button>
+        </div>
+        {err && <ErrNote>{err}</ErrNote>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="feat-sect">
+      <div className="feat-sect-h">
+        Autopilot {Icon.bolt()} running
+        <span className="spacer" />
+        <button className="btn btn-line btn-sm" disabled={!!busy} onClick={() => void act("pause")} title="Stop starting new tasks. A turn already in flight keeps going — use Stop in its session to end that.">
+          {busy === "pause" ? "Pausing…" : "Pause"}
+        </button>
+      </div>
+      <div className="feat-branch">
+        <div className="fb-status">
+          {running.length > 0 && <span className="fb-stat ahead">{running.length} running</span>}
+          <span className="fb-stat ok">{feature.done}/{feature.total} merged into {feature.branch || project.branch}</span>
+          {blocked.length > 0 && <span className="fb-stat conflict">{blocked.length} stuck, waiting on you</span>}
+        </div>
+        {blocked.length > 0 ? (
+          <div className="fb-note">
+            Autopilot stopped on {blocked.length === 1 ? "a task" : `${blocked.length} tasks`} it couldn&apos;t finish. Open{" "}
+            {blocked.length === 1 ? "it" : "them"} below and reply — answering clears the block and it picks the task back up.
+          </div>
+        ) : remaining.length === 0 ? (
+          <div className="fb-note">All tasks done. Opening the pull request…</div>
+        ) : null}
+        <div className="fb-actions">
+          <button className="btn btn-line btn-sm" disabled={!!busy || !feature.branch} onClick={() => void act("pr")} title="Push the integration branch and open the PR now, without waiting for the remaining tasks">
+            {Icon.git()} {busy === "pr" ? "Opening…" : "Open the PR now"}
+          </button>
+        </div>
+      </div>
+      {err && <ErrNote>{err}</ErrNote>}
     </div>
   );
 }

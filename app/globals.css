@@ -1624,6 +1624,14 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 /* The member's delivered outcome. Indented under the title so the column of
    them reads as the feature's business summary, top to bottom. */
 .feat-task .ft-outcome{padding-left:19px;font-size:11.5px;line-height:1.45;color:var(--green);}
+/* Why autopilot stopped. Deliberately louder than the outcome line and shown in
+   full rather than truncated — it is the one thing the user has to act on, and a
+   clipped reason means opening the task just to find out what it said. */
+.feat-task .ft-blocked{
+  display:flex;gap:6px;align-items:flex-start;padding-left:19px;font-size:11.5px;line-height:1.45;
+  color:var(--amber,var(--accent-ink));white-space:pre-wrap;
+}
+.feat-task .ft-blocked svg{flex:0 0 auto;margin-top:2px;}
 .feat-task:last-child{border-bottom:0;}
 .feat-task:hover{background:var(--surface-2);}
 .feat-task .ft-title{flex:1;min-width:0;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

@@ -36,12 +36,15 @@ export interface FeatureRow {
   branch: string; // integration branch ("" = members use the project branch)
   base_sha: string;
   merged_at: number; // 0 = the integration branch hasn't landed yet
+  autopilot: number; // 1 = the approved plan is running unattended (lib/autopilot.ts)
+  pr_url: string; // the integration branch's open PR ("" = none); set = waiting on your review
   archived: number; // 1 = hidden from the working set (mirrors project.deprecated)
   position: number;
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'
   suggested_count: number; // members still in the suggested tray
   awaiting_count: number; // members waiting on the user right now
+  blocked_count: number; // members autopilot escalated and stopped working
 }
 export interface TaskRow {
   id: string;
@@ -60,6 +63,7 @@ export interface TaskRow {
   session_id: string | null;
   pr_url: string; // GitHub PR opened from this task's branch ("" = none yet)
   outcome: string; // one plain-language sentence on what the task delivered ("" = not reported)
+  blocked_reason: string; // why autopilot stopped working this task ("" = not blocked)
   generation: number;
   started: number;
   running: number;
