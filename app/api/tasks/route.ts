@@ -24,6 +24,11 @@ export async function POST(req: Request) {
     // Agent is chosen at creation and fixed for the task's life (sessions can't
     // migrate between CLIs); createTask falls back to the project default.
     agent: typeof body.agent === "string" ? body.agent : undefined,
+    // Run config from the New task modal. Unlike the suggest_task path these
+    // come from a picker built off the same capability descriptor the server
+    // would validate against, so there is nothing here to check.
+    model: typeof body.model === "string" ? body.model : null,
+    reasoning: typeof body.reasoning === "string" ? body.reasoning : null,
   });
   // `suggested` tasks are agent proposals in the tray; a real user-created task
   // is the funnel's "first task" step. Flag which so the funnel can filter.
