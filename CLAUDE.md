@@ -31,6 +31,8 @@ Only the SELECTED task has a transcript stream open. Everything else stays live 
 
 **Adding a third agent**: implement `AgentDriver` in `lib/agents/<id>/driver.ts` (only `runTurn()` is required), register it in `registry.ts`, ship its CLI in the `Dockerfile`. Nothing else changes — the runner, routes, recap/refresh jobs, and UI data flow are all seam-generic. Pin it with the driver-contract test (`tests/agentDriver.test.ts`, which mocks a driver's CLI at the SDK boundary and runs it through the real runner).
 
+**Model delegation**: a driver's `models[]` entries may carry a `tier` (`light`/`standard`/`heavy`/`max`) marking them as `suggest_task` delegation targets — `buildDelegationGuidance()` in `lib/agents/shared.ts` generates the planner's menu and routing rubric from those, so the prompt can't rot into naming a model the picker no longer offers. At most one model per tier (`tests/delegation.test.ts`); sparse tiers fold onto the nearest present one, so a two-model agent still covers all four categories of work. Untiered options stay picker-only — a human can pin a legacy version, a planner is never offered one — but `validateRun()` in `lib/agentTools.ts` *accepts* any value in the descriptor, tiered or not. Ship no tiers and the driver simply opts out: the tool behaves exactly as it did before per-task delegation existed.
+
 **A task is a lineage of sessions**: `/clear` ends generation N, condenses its transcript to a summary, and generation N+1 starts fresh seeded with all prior summaries.
 
 ### Key modules (by responsibility)
