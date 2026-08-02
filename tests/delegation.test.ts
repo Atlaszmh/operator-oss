@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { CLAUDE_CAPABILITIES } from "@/lib/agents/claude/capabilities";
 import { CODEX_CAPABILITIES } from "@/lib/agents/codex/capabilities";
 import { buildDelegationGuidance } from "@/lib/agents/shared";
+import { createProject, createTask, getTask } from "@/lib/store";
 import type { AgentCapabilities } from "@/lib/agents/types";
 
 // buildDelegationGuidance assumes at most one model per tier — a second one
@@ -61,5 +62,19 @@ describe("buildDelegationGuidance", () => {
       models: CLAUDE_CAPABILITIES.models.map(({ tier: _tier, ...m }) => m),
     } as AgentCapabilities;
     expect(buildDelegationGuidance(caps)).toBe("");
+  });
+});
+
+describe("createTask run config", () => {
+  it("persists model and reasoning when given", () => {
+    const p = createProject({ name: "Store" });
+    const t = createTask({ project_id: p.id, title: "T", model: "haiku", reasoning: "off" });
+    expect(getTask(t.id)).toMatchObject({ model: "haiku", reasoning: "off" });
+  });
+
+  it("defaults both to null — inherit the agent default", () => {
+    const p = createProject({ name: "Store2" });
+    const t = createTask({ project_id: p.id, title: "T" });
+    expect(getTask(t.id)).toMatchObject({ model: null, reasoning: null });
   });
 });

@@ -298,6 +298,11 @@ export function createTask(input: {
   priority?: Priority;
   suggested?: boolean;
   agent?: string;
+  // Run config. null/absent = inherit (app default, then the driver's own).
+  // Callers are responsible for validating these against the agent's capability
+  // descriptor — see validateRun() in lib/agentTools.ts.
+  model?: string | null;
+  reasoning?: string | null;
 }): Task {
   const now = Date.now();
   const id = nanoid();
@@ -310,10 +315,10 @@ export function createTask(input: {
   ).n;
   getDb()
     .prepare(
-      `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, agent, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?)`
+      `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, agent, model, reasoning, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, input.project_id, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, position, now, now);
+    .run(id, input.project_id, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, input.model ?? null, input.reasoning ?? null, position, now, now);
   return getTask(id)!;
 }
 
