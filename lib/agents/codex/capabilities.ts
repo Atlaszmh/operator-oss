@@ -11,9 +11,13 @@ import { codexApiKey } from "./auth";
 const CTX = 272_000;
 
 export const CODEX_CAPABILITIES: AgentCapabilities = {
+  // `tier` marks a delegation target for suggest_task (buildDelegationGuidance
+  // in lib/agents/shared.ts). Max is tier "heavy", not "max": with only two
+  // models the sparse-tier fold collapses standard + heavy + max onto it, and
+  // calling it "max" would leave "ordinary feature work" folding oddly.
   models: [
-    { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max", sub: "most capable", contextWindow: CTX },
-    { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini", sub: "faster, cheaper", contextWindow: CTX },
+    { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max", sub: "most capable", contextWindow: CTX, tier: "heavy" },
+    { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini", sub: "faster, cheaper", contextWindow: CTX, tier: "light" },
   ],
   // Off/Think/Think hard/Ultrathink → codex's model_reasoning_effort scale.
   reasoningOptions: [

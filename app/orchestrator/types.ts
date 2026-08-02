@@ -189,7 +189,10 @@ export const PRIORITIES: Priority[] = ["hi", "med", "lo"];
 // capability descriptor (models / reasoning / permission modes it supports, plus
 // feature flags) served by GET /api/agents. The client renders every picker from
 // this data, so a task's controls always match the agent it runs under.
-export interface AgentModelOption { value: string; label: string; sub: string; contextWindow: number; group?: string }
+// `tier` is server-side only (it drives the suggest_task routing guidance in
+// lib/agents/shared.ts); it's mirrored here so the next person diffing the two
+// interfaces doesn't find a phantom drift.
+export interface AgentModelOption { value: string; label: string; sub: string; contextWindow: number; group?: string; tier?: "light" | "standard" | "heavy" | "max" }
 export interface AgentPickerOption { value: string; label: string; sub: string }
 export interface AgentCapabilities {
   models: AgentModelOption[];

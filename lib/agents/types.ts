@@ -10,6 +10,13 @@ import type { Project, Task, StreamEvent } from "../types";
 
 export type { StreamEvent };
 
+/**
+ * Delegation tier — the class of work a model is the right pick for. Read only
+ * by buildDelegationGuidance() in lib/agents/shared.ts, which generates the
+ * suggest_task routing menu and rubric from these.
+ */
+export type ModelTier = "light" | "standard" | "heavy" | "max";
+
 // One selectable model in a driver's picker. `value` is what's persisted in
 // tasks.model (null there = inherit the driver's default); `contextWindow` is
 // the model's token window, driving the context-occupancy gauge. `group` is an
@@ -22,6 +29,13 @@ export interface AgentModelOption {
   sub: string; // short picker subtitle, e.g. "most capable"
   contextWindow: number;
   group?: string;
+  /**
+   * Marks this model as a delegation target and says what for. Untiered options
+   * stay picker-only: a human may pin "Opus 4.6 · legacy" from the session
+   * toolbar, but a planning agent is never offered it. At most one model per
+   * tier per agent — pinned by tests/delegation.test.ts.
+   */
+  tier?: ModelTier;
 }
 
 // A reasoning preset / permission mode a driver supports. `value` is what's

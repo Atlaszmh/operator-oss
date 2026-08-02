@@ -23,12 +23,20 @@ import type { AgentCapabilities } from "../types";
 const K200 = 200_000;
 const M1 = 1_000_000;
 
+// `tier` marks a model as a suggest_task delegation target (see
+// buildDelegationGuidance in lib/agents/shared.ts). Only the four current
+// families carry one: offering a planner a pinned legacy version invites it to
+// route real work there because the label sounded capable.
+//
+// ponytail: one model per tier, so heavy work on a very large codebase routes to
+// `fable` rather than `opus[1m]` — the 1M variants are untiered. Widen tier to a
+// list, with window size as a secondary axis, if that costs more than it saves.
 export const CLAUDE_CAPABILITIES: AgentCapabilities = {
   models: [
-    { value: "fable", label: "Fable 5", sub: "most capable · 1M context", contextWindow: M1, group: "Latest" },
-    { value: "opus", label: "Opus 5", sub: "everyday complex work", contextWindow: K200, group: "Latest" },
-    { value: "sonnet", label: "Sonnet 5", sub: "efficient for routine tasks", contextWindow: K200, group: "Latest" },
-    { value: "haiku", label: "Haiku 4.5", sub: "fastest, lowest cost", contextWindow: K200, group: "Latest" },
+    { value: "fable", label: "Fable 5", sub: "most capable · 1M context", contextWindow: M1, group: "Latest", tier: "max" },
+    { value: "opus", label: "Opus 5", sub: "everyday complex work", contextWindow: K200, group: "Latest", tier: "heavy" },
+    { value: "sonnet", label: "Sonnet 5", sub: "efficient for routine tasks", contextWindow: K200, group: "Latest", tier: "standard" },
+    { value: "haiku", label: "Haiku 4.5", sub: "fastest, lowest cost", contextWindow: K200, group: "Latest", tier: "light" },
     { value: "opusplan", label: "Opus Plan Mode", sub: "Opus while planning, Sonnet after", contextWindow: K200, group: "Latest" },
     { value: "opus[1m]", label: "Opus 5 (1M)", sub: "long sessions, large codebases", contextWindow: M1, group: "1M context" },
     { value: "sonnet[1m]", label: "Sonnet 5 (1M)", sub: "long sessions, large codebases", contextWindow: M1, group: "1M context" },
