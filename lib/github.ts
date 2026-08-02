@@ -338,12 +338,34 @@ export function buildPrBody(input: { description?: string; summary?: string; tas
 }
 
 /**
- * Push a task's work branch to origin and open a GitHub PR against the base
- * branch via `gh pr create`. Idempotent: if an open PR for the branch already
- * exists, the push just updated it and its URL is returned (`existing: true`).
- * Never throws — every failure mode (no gh, not logged in, no remote, push
- * rejected, gh error) comes back as `{ ok: false, error }` with a message that
- * says what to do about it.
+ * A feature's PR body: the approved spec, then every member task's self-reported
+ * outcome line. Nothing new is generated here on purpose — the feature layer
+ * already established that a feature's business summary IS its members' outcome
+ * lines stacked, so summarizing them again would be a second thing to keep in
+ * sync with the first. Pure — exported for tests.
+ */
+export function buildFeaturePrBody(input: {
+  context: string;
+  description: string;
+  outcomes: { title: string; outcome: string }[];
+  featureId: string;
+}): string {
+  const parts: string[] = [];
+  if (input.description?.trim()) parts.push(input.description.trim());
+  if (input.context?.trim()) parts.push(`## Spec\n\n${input.context.trim()}`);
+  if (input.outcomes.length)
+    parts.push(
+      `## What landed\n\n` +
+        input.outcomes
+          .map((o) => `- **${o.title}** — ${o.outcome?.trim() || "_no outcome reported_"}`)
+          .join("\n")
+    );
+  parts.push(`---\n_Opened by Agent Orchestrator autopilot (feature ${input.featureId})._`);
+  return parts.join("\n\n");
+}
+
+/**
+ * A task's PR: `createBranchPr` with the task's worktree as the working dir.
  */
 export async function createTaskPr(input: {
   worktreePath: string;
@@ -352,7 +374,36 @@ export async function createTaskPr(input: {
   title: string;
   body: string;
 }): Promise<CreatePrResult> {
-  const { worktreePath, workBranch, baseBranch, title, body } = input;
+  return createBranchPr({
+    cwd: input.worktreePath,
+    branch: input.workBranch,
+    baseBranch: input.baseBranch,
+    title: input.title,
+    body: input.body,
+  });
+}
+
+/**
+ * Push a branch to origin and open a GitHub PR against the base branch via
+ * `gh pr create`. Idempotent: if an open PR for the branch already exists, the
+ * push just updated it and its URL is returned (`existing: true`). Never throws —
+ * every failure mode (no gh, not logged in, no remote, push rejected, gh error)
+ * comes back as `{ ok: false, error }` with a message that says what to do.
+ *
+ * `cwd` is any working dir inside the repo. A task passes its worktree; a
+ * feature's integration branch has no worktree, so it passes the project's repo
+ * path — the same split `landBranch` made out of `mergeTask`, and for the same
+ * reason: factor out the part that never needed a worktree rather than write a
+ * second implementation beside it that drifts.
+ */
+export async function createBranchPr(input: {
+  cwd: string;
+  branch: string;
+  baseBranch: string;
+  title: string;
+  body: string;
+}): Promise<CreatePrResult> {
+  const { cwd: worktreePath, branch: workBranch, baseBranch, title, body } = input;
 
   const st = await ghStatus();
   if (!st.installed)

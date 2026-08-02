@@ -160,10 +160,10 @@ export interface AgentDriver {
 
   // ---------- one-shot helpers (no session, text in → text out) ----------
   //
-  // All three are OPTIONAL: a driver can ship runTurn() alone and the app
+  // All of these are OPTIONAL: a driver can ship runTurn() alone and the app
   // backstops the missing helper with the configured utility agent (see
   // lib/agents/oneshots.ts). summarizeTranscript is task-scoped (runs on the
-  // task's own agent so the work bills the right login); draft/recap are
+  // task's own agent so the work bills the right login); draft/recap/review are
   // project-scoped and run on the utility agent.
 
   /** Condense a session transcript into a handoff note for the /clear flow. */
@@ -172,6 +172,13 @@ export interface AgentDriver {
   draftProjectContext?(project: Project, digest: string): Promise<string>;
   /** Short "where you left off" recap from a recent-activity digest. */
   summarizeProjectRecap?(project: Project, digest: string): Promise<string>;
+  /**
+   * Judge a finished task's diff against its brief — autopilot's done gate.
+   * Read-only, run in `cwd` (the task's worktree) so the reviewer can open the
+   * files a hunk touches. Returns the raw reply; the caller reads the decision
+   * out of it with parseVerdict() from lib/agents/shared.ts.
+   */
+  reviewTask?(prompt: string, cwd: string): Promise<string>;
 
   // ---------- auth (the setup wizard's connect / verify flow) ----------
 

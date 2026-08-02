@@ -243,6 +243,80 @@ export function buildConflictPrompt(baseBranch: string, conflicts: string[]): st
   ].join("\n");
 }
 
+// ---------- the autopilot review gate (lib/gates.ts) ----------
+//
+// Marker and parser live together here for the same reason OUTCOME_INSTRUCTION
+// and extractOutcome do: a marker whose parser sits in another file drifts the
+// first time either one is edited, and the failure is silent.
+
+export const REVIEW_INSTRUCTION =
+  `End your reply with a line of exactly "VERDICT: PASS" or "VERDICT: FAIL", and nothing else on that line. ` +
+  `PASS means this change is safe to merge with no human looking at it. FAIL means a human or another turn ` +
+  `must act first. Put your reasoning ABOVE that line; on a FAIL, state precisely what must change, written ` +
+  `as instructions to the engineer who will fix it — they will receive your words verbatim and nothing else.`;
+
+// Tolerant of the markdown a model reaches for unprompted (**VERDICT:** PASS,
+// "> VERDICT: FAIL"), anchored per line so it can't match mid-sentence. FIRST
+// match wins, unlike extractOutcome's last-wins: a reviewer that mentions the
+// word once and then trails off must not have a later stray line overrule it.
+const VERDICT_RE = /^[ \t>#*_-]*verdict[ \t*_]*:[ \t]*\**(pass|fail)\b/im;
+
+/**
+ * Read a reviewer's verdict out of its reply.
+ *
+ * **Fails closed.** A reply with no parseable marker — truncated, refused,
+ * rambled past its instructions — is a FAIL, because the alternative is that a
+ * malformed review silently merges code into a branch nobody is going to read.
+ *
+ * `notes` is everything above the marker; on a failure that text becomes the
+ * next turn's instructions, so it is returned verbatim rather than summarized.
+ */
+export function parseVerdict(text: string): { ok: boolean; notes: string } {
+  const m = VERDICT_RE.exec(text);
+  const notes = (m ? text.slice(0, m.index) : text).trim();
+  if (!m) return { ok: false, notes: notes || "The reviewer returned no verdict." };
+  return { ok: m[1].toLowerCase() === "pass", notes };
+}
+
+/**
+ * The reviewer's prompt. It sees the task's own brief, the feature spec that
+ * brief was cut from, then the diff — in that order on purpose, so "did this
+ * build the right thing" is answerable before "is the code any good".
+ */
+export function buildReviewPrompt(input: {
+  taskTitle: string;
+  taskDescription: string;
+  featureContext: string;
+  projectContext: string;
+  diff: string;
+  testOutput: string;
+}): string {
+  return [
+    `You are reviewing one engineer's completed task before it is merged WITHOUT any human review.`,
+    `You are the last line of defence, so be exacting — but be exacting about the right things.`,
+    ``,
+    `FAIL if the change: is incomplete; does something other than what the task asked; breaks an existing`,
+    `contract or caller; leaves debug output, placeholder text, commented-out code, or a stubbed function`,
+    `behind; or contains a bug you can point at. Also FAIL if it quietly widened its own scope — work`,
+    `nobody asked for is as unmergeable as work left undone.`,
+    ``,
+    `PASS if it does what was asked and is safe to land. Do NOT fail it over style, naming, or how you`,
+    `would have written it. You may read any file in the working directory to check a claim.`,
+    ``,
+    `=== PROJECT CONTEXT ===\n${input.projectContext || "(none)"}`,
+    ``,
+    `=== FEATURE SPEC (what the whole feature is for) ===\n${input.featureContext || "(none)"}`,
+    ``,
+    `=== THIS TASK ===\n${input.taskTitle}\n${input.taskDescription || "(no description)"}`,
+    ``,
+    `=== TEST RUN ===\n${input.testOutput || "(no test command configured)"}`,
+    ``,
+    `=== DIFF ===\n${input.diff || "(empty diff — nothing was changed, which is a FAIL unless the task was purely investigative)"}`,
+    ``,
+    REVIEW_INSTRUCTION,
+  ].join("\n");
+}
+
 export function clip(s: unknown, n = 4000): string {
   const str = typeof s === "string" ? s : JSON.stringify(s, null, 2);
   return str.length > n ? str.slice(0, n) + `\n… (${str.length - n} more chars)` : str;

@@ -23,7 +23,7 @@ import type { AgentDriver } from "./types";
 import type { Project, Task } from "../types";
 
 // The one-shot helper names on AgentDriver, all optional.
-type OneShotKey = "summarizeTranscript" | "draftProjectContext" | "summarizeProjectRecap";
+type OneShotKey = "summarizeTranscript" | "draftProjectContext" | "summarizeProjectRecap" | "reviewTask";
 
 /**
  * The agent that runs project-scoped one-shots and backstops any task whose
@@ -71,4 +71,16 @@ export async function draftProjectContext(project: Project, digest: string): Pro
 /** "Where you left off" recap — PROJECT-scoped (utility agent). */
 export async function summarizeProjectRecap(project: Project, digest: string): Promise<string> {
   return resolve(utilityDriver(), "summarizeProjectRecap")(project, digest);
+}
+
+/**
+ * Autopilot's done-gate review — PROJECT-scoped, so it runs on the utility agent.
+ *
+ * Deliberately NOT task-scoped like summarizeTranscript: the whole value of the
+ * gate is that something other than the model which wrote the code decides
+ * whether it merges. Routing this to `task.agent` would have the same login,
+ * often the same session's model, grading its own homework.
+ */
+export async function reviewTask(prompt: string, cwd: string): Promise<string> {
+  return resolve(utilityDriver(), "reviewTask")(prompt, cwd);
 }

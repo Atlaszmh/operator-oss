@@ -25,12 +25,24 @@ export interface Features {
    *  stay opt-in via ORCH_SERVICE_HOSTS (lib/service-host.mjs), so enabling
    *  services exposes nothing publicly. */
   services: boolean;
+  /** Autopilot (lib/autopilot.ts): the Approve plan button, the per-feature
+   *  switch, and the scheduler that runs an approved plan unattended. Off until
+   *  it has earned trust on a real project; ORCH_FEATURE_AUTOPILOT=1. */
+  autopilot: boolean;
+  /** Autopilot runs its full gate and records the verdict, but never merges on
+   *  it — the user still clicks. On by default so that ENABLING autopilot can't
+   *  land code on its first run: the reviewer's judgement gets calibrated
+   *  against real work before it's trusted. ORCH_FEATURE_AUTOPILOT_SHADOW=0
+   *  is the deliberate act of trusting it. */
+  autopilotShadow: boolean;
 }
 
 export const DEFAULT_FEATURES: Features = {
   livePreview: false,
   omniSearch: false,
   services: true,
+  autopilot: false,
+  autopilotShadow: true,
 };
 
 const truthy = (v: string | undefined) => v === "1" || v === "true" || v === "on";
@@ -45,6 +57,8 @@ export function resolveFeatures(): Features {
     livePreview: flag(process.env.ORCH_FEATURE_LIVE_PREVIEW, DEFAULT_FEATURES.livePreview),
     omniSearch: flag(process.env.ORCH_FEATURE_OMNI_SEARCH, DEFAULT_FEATURES.omniSearch),
     services: flag(process.env.ORCH_FEATURE_SERVICES, DEFAULT_FEATURES.services),
+    autopilot: flag(process.env.ORCH_FEATURE_AUTOPILOT, DEFAULT_FEATURES.autopilot),
+    autopilotShadow: flag(process.env.ORCH_FEATURE_AUTOPILOT_SHADOW, DEFAULT_FEATURES.autopilotShadow),
   };
 }
 

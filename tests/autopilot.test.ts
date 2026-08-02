@@ -1,5 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// The reviewer half of the gate is scripted: it's an LLM turn, and what these
+// tests pin is the gate's WIRING (what runs, in what order, what a failure
+// produces), not the reviewer's judgement.
+const { reviewMock } = vi.hoisted(() => ({ reviewMock: vi.fn() }));
+vi.mock("@/lib/agents/oneshots", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/agents/oneshots")>()),
+  reviewTask: (prompt: string, cwd: string) => reviewMock(prompt, cwd),
+}));
+
+import { runGate } from "@/lib/gates";
+import { parseVerdict } from "@/lib/agents/shared";
+import { buildFeaturePrBody } from "@/lib/github";
+import { ensureWorktree } from "@/lib/git";
+import { makeRepo } from "./helpers";
 import {
   createProject,
   createFeature,
@@ -12,7 +26,35 @@ import {
   setTaskDeps,
   featureMembers,
   readyMembers,
+  updateProject,
 } from "@/lib/store";
+
+beforeEach(() => {
+  reviewMock.mockReset();
+  reviewMock.mockResolvedValue("Looks right.\nVERDICT: PASS");
+});
+
+/** A project on a real git repo, with a feature and one started task holding a worktree. */
+async function gateFixture(patch: { test_command?: string } = {}) {
+  const repo = await makeRepo();
+  const project = updateProject(createProject({ name: `G-${Math.random().toString(36).slice(2, 8)}` }).id, {
+    repo_path: repo,
+    branch: "main",
+    test_command: patch.test_command ?? "",
+  })!;
+  const feature = createFeature({ project_id: project.id, name: `GF-${Math.random().toString(36).slice(2, 8)}` });
+  const task = createTask({ project_id: project.id, title: "Do the thing", feature_id: feature.id });
+  const wt = await ensureWorktree(repo, task.id);
+  const withWt = updateTask(task.id, {
+    started: 1,
+    status: "in_progress",
+    awaiting_input: 1,
+    worktree_path: wt?.path ?? "",
+    work_branch: wt?.branch ?? "",
+    base_sha: wt?.baseSha ?? "",
+  })!;
+  return { project, feature, task: withWt };
+}
 
 describe("autopilot schema", () => {
   it("defaults autopilot off and round-trips the new columns", () => {
@@ -73,5 +115,103 @@ describe("readyMembers", () => {
     // point of the graph having a consumer.
     updateTask(dep.id, { status: "done" });
     expect(readyMembers(f.id).map((t) => t.id)).toContain(afterDep.id);
+  });
+});
+
+describe("parseVerdict", () => {
+  it("reads a verdict through the markdown a model reaches for", () => {
+    expect(parseVerdict("looks fine\nVERDICT: PASS").ok).toBe(true);
+    expect(parseVerdict("**VERDICT:** FAIL\n").ok).toBe(false);
+    expect(parseVerdict("> verdict: pass").ok).toBe(true);
+  });
+
+  it("fails closed when there is no parseable verdict", () => {
+    // An unparseable review must never become an automatic merge.
+    expect(parseVerdict("I had a lot of thoughts but never concluded").ok).toBe(false);
+    expect(parseVerdict("").ok).toBe(false);
+  });
+
+  it("returns the reasoning above the marker verbatim, as the next turn's instructions", () => {
+    const v = parseVerdict("The migration is missing.\nAlso the test is skipped.\nVERDICT: FAIL");
+    expect(v.notes).toBe("The migration is missing.\nAlso the test is skipped.");
+  });
+});
+
+describe("runGate", () => {
+  it("fails on a red suite and never spends a review turn on it", async () => {
+    const { project, feature, task } = await gateFixture({ test_command: "exit 1" });
+    const v = await runGate(task, project, feature);
+    expect(v.ok).toBe(false);
+    expect(v.testsRan).toBe(true);
+    expect(v.reviewRan).toBe(false);
+    expect(v.feedback).toMatch(/failed in your worktree/i);
+    expect(reviewMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the tests in the task's worktree, not the project repo", async () => {
+    // The marker file exists only in the worktree's branch, so a command that
+    // requires it passes there and would fail in the shared checkout.
+    const { project, feature, task } = await gateFixture({ test_command: "test -f only-here.txt" });
+    const fs = await import("node:fs");
+    fs.writeFileSync(`${task.worktree_path}/only-here.txt`, "x");
+    const v = await runGate(task, project, feature);
+    expect(v.testsRan).toBe(true);
+    expect(v.ok).toBe(true);
+  });
+
+  it("tells the reviewer when there is no test command instead of implying the change was proven", async () => {
+    const { project, feature, task } = await gateFixture({ test_command: "" });
+    const v = await runGate(task, project, feature);
+    expect(v.testsRan).toBe(false);
+    expect(v.reviewRan).toBe(true);
+    expect(reviewMock.mock.calls[0][0]).toMatch(/no test command/i);
+  });
+
+  it("passes the feature spec and the task brief to the reviewer, and runs it in the worktree", async () => {
+    const { project, feature, task } = await gateFixture();
+    updateFeature(feature.id, { context: "SPEC-SENTINEL" });
+    await runGate(task, { ...project, context: "PROJECT-SENTINEL" }, getFeature(feature.id));
+    const [prompt, cwd] = reviewMock.mock.calls[0];
+    expect(prompt).toContain("SPEC-SENTINEL");
+    expect(prompt).toContain("PROJECT-SENTINEL");
+    expect(prompt).toContain("Do the thing");
+    expect(cwd).toBe(task.worktree_path);
+  });
+
+  it("turns a failing review into instructions, not a report", async () => {
+    reviewMock.mockResolvedValue("You left a TODO in the handler.\nVERDICT: FAIL");
+    const { project, feature, task } = await gateFixture();
+    const v = await runGate(task, project, feature);
+    expect(v.ok).toBe(false);
+    expect(v.feedback).toContain("You left a TODO in the handler.");
+  });
+
+  it("fails closed when the reviewer itself cannot run", async () => {
+    reviewMock.mockRejectedValue(new Error("No coding agent is connected."));
+    const { project, feature, task } = await gateFixture();
+    const v = await runGate(task, project, feature);
+    expect(v.ok).toBe(false);
+    expect(v.reviewRan).toBe(false);
+    expect(v.feedback).toMatch(/review could not run/i);
+  });
+});
+
+describe("buildFeaturePrBody", () => {
+  it("stacks the spec and every member's outcome line", () => {
+    const body = buildFeaturePrBody({
+      context: "The approved spec.",
+      description: "Short label.",
+      outcomes: [
+        { title: "Login", outcome: "Users can log in with Apple." },
+        { title: "Unreported", outcome: "" },
+      ],
+      featureId: "f1",
+    });
+    expect(body).toContain("The approved spec.");
+    expect(body).toContain("Users can log in with Apple.");
+    // A member that never reported an outcome is still listed — an absent line
+    // is information, and dropping the row would hide that the task ran at all.
+    expect(body).toContain("Unreported");
+    expect(body).toContain("f1");
   });
 });

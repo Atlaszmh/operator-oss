@@ -73,6 +73,36 @@ export const INTERNAL_BASE_URL =
 export const ORCH_MCP_SCRIPT = path.join(process.cwd(), "scripts", "orch-mcp.mjs");
 
 /**
+ * How many of one feature's tasks autopilot runs at once (lib/autopilot.ts).
+ * Parallel wherever the dependency graph allows it; this cap is what stops a
+ * twenty-task plan from opening twenty sessions against one login. Per-feature
+ * overrides are deliberately not a thing — raise this if 2 is too slow.
+ */
+export const AUTOPILOT_CONCURRENCY = process.env.ORCH_AUTOPILOT_CONCURRENCY
+  ? Number(process.env.ORCH_AUTOPILOT_CONCURRENCY)
+  : 2;
+
+/**
+ * How many times a task may fail its gate (or fail to resolve a merge conflict)
+ * before autopilot stops and escalates it to the user. Low on purpose: an agent
+ * that hasn't fixed it in two rounds is usually missing context only the user
+ * has, and further rounds just spend quota. Expect to tune this — the right
+ * number is empirical, which is exactly why it's an env var.
+ */
+export const AUTOPILOT_ATTEMPTS = process.env.ORCH_AUTOPILOT_ATTEMPTS
+  ? Number(process.env.ORCH_AUTOPILOT_ATTEMPTS)
+  : 2;
+
+/**
+ * Hard timeout for an autopilot gate's test run, in ms. A hung suite must not
+ * pin a queue slot forever — the run is killed and the task escalates, which is
+ * information, where waiting is not. (10 minutes.)
+ */
+export const GATE_TEST_TIMEOUT_MS = process.env.ORCH_GATE_TEST_TIMEOUT_MS
+  ? Number(process.env.ORCH_GATE_TEST_TIMEOUT_MS)
+  : 10 * 60 * 1000;
+
+/**
  * The public origin the app is served from (e.g. https://orch.example.com when
  * behind a tunnel/reverse proxy). Used by the client to build absolute
  * ws(s):// URLs. Empty = same-origin via window.location, which is correct for

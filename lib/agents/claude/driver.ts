@@ -485,6 +485,36 @@ async function summarizeProjectRecap(project: Project, digest: string): Promise<
   return out.trim() || "(no recap produced)";
 }
 
+/**
+ * Review one task's diff against its brief — autopilot's done gate. Unlike the
+ * summarizers this is a short READ-ONLY agent loop in the task's own worktree,
+ * modelled on draftProjectContext: a reviewer that can only see the patch has to
+ * guess at everything the patch touches, and guessing is exactly what this gate
+ * exists to remove. Returns the raw reply; parseVerdict() reads the decision.
+ */
+async function reviewTask(prompt: string, cwd: string): Promise<string> {
+  const response = query({
+    prompt,
+    options: {
+      cwd: cwd || process.cwd(),
+      allowedTools: ["Read", "Grep", "Glob"],
+      maxTurns: 12,
+      permissionMode: "bypassPermissions",
+      pathToClaudeCodeExecutable: CLAUDE_PATH,
+    },
+  });
+
+  let out = "";
+  for await (const message of response) {
+    if (message.type === "assistant") {
+      for (const block of message.message.content) {
+        if (block.type === "text") out += block.text;
+      }
+    }
+  }
+  return out.trim();
+}
+
 export const claudeDriver: AgentDriver = {
   id: "claude",
   label: "Claude Code",
@@ -493,6 +523,7 @@ export const claudeDriver: AgentDriver = {
   summarizeTranscript,
   draftProjectContext,
   summarizeProjectRecap,
+  reviewTask,
   // Auth delegates to lib/claude-auth.ts (the headless `claude auth login`
   // flow); the interface shapes were modeled on it, so this is a direct map.
   authStatus: claudeStatus,
