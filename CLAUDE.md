@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Orchestrator — a local-first web app that runs many Claude Code sessions in parallel across multiple projects from one screen. Each **project** carries reusable context + a working directory; each **task** is its own Claude Code session in its own git worktree, driven by `@anthropic-ai/claude-agent-sdk` against the user's local Claude login (no API key). (A hosted version, getoperator.dev, lives in a separate private repo that overlays this one — see "Repo split" below.)
+Orchestrator — a local-first web app that runs many Claude Code sessions in parallel across multiple projects from one screen. Each **project** carries reusable context + a working directory; each **task** is its own Claude Code session in its own git worktree, driven by `@anthropic-ai/claude-agent-sdk` against the user's local Claude login (no API key). An optional **feature** groups tasks between the two (see "The feature layer"). (A hosted version, getoperator.dev, lives in a separate private repo that overlays this one — see "Repo split" below.)
 
 ## Commands
 
@@ -35,10 +35,27 @@ Only the SELECTED task has a transcript stream open. Everything else stays live 
 
 **A task is a lineage of sessions**: `/clear` ends generation N, condenses its transcript to a summary, and generation N+1 starts fresh seeded with all prior summaries.
 
+### The feature layer
+
+`features` is the optional level between a project and its tasks (`tasks.feature_id`, nullable). **Everything about it is opt-in — `feature_id NULL` is the pre-feature behaviour, byte for byte**, including how the tasks column groups (feature groups render *above* the existing status groups, which then hold only the ungrouped tasks).
+
+Three things a feature owns, each independently optional:
+
+- **Shared context.** `features.context` is emitted by `buildProjectContext()` between the project context and the task framing. It lands in *every turn of every member task*, so it is spec-sized by convention, not by enforcement.
+- **An integration branch.** `features.branch` (`''` = off). When set, member tasks base off and merge into it instead of `projects.branch`, and the feature lands on the project branch as one unit. **`taskBaseBranch(task, project)` in `lib/store.ts` is THE resolution point** — every merge/sync/PR/worktree path routes through it, so a caller that forgets features can't exist. `ensureWorktree(repo, taskId, baseBranch?)` takes the fork point (absent/unknown → HEAD, which is what it always did).
+- **Agent planning.** `suggest_feature` (upsert by name) + `suggest_task({feature})` (unknown name auto-creates, because a planner that gets twenty errors files nothing). Both mount paths share `lib/agentTools.ts`, same split as `suggest_task`.
+
+Two deliberate departures worth knowing before you "fix" them:
+
+- **`ON DELETE SET NULL`, not CASCADE** — the one exception to "delete is hard delete". A feature is a label *over* tasks, not what they are; deleting the grouping must not destroy the work filed under it. Pinned by `tests/features.test.ts`.
+- **No `status` column** — progress is derived in `listFeatures()`. A stored status would need writing from every path that touches `tasks.status` and would drift the first time one was missed.
+
+`landBranch()` in `lib/git.ts` is `mergeTask` minus the commit step, split out so `mergeFeature` (no worktree to commit) lands through the same code. `worktreeSyncStatus`'s `worktreePath` is optional for the same reason — only the dirty check needs one. Feature-level merge conflicts are reported, not resolved in-app (marked with a `ponytail:` comment in the sync route).
+
 ### Key modules (by responsibility)
 
 - `lib/db.ts` — SQLite schema + migrations (single shared connection, WAL); `lib/store.ts` — typed queries; `lib/types.ts` — shared types.
-- `lib/git.ts` — per-task worktrees/branches, diffs, merge (`mergeTask`, `prepareWorktreeMerge`/`completeWorktreeMerge`/`abortWorktreeMerge`), base-branch sync (`worktreeSyncStatus`/`fastForwardWorktree`).
+- `lib/git.ts` — per-task worktrees/branches, diffs, merge (`mergeTask`, `landBranch`, `mergeFeature`, `prepareWorktreeMerge`/`completeWorktreeMerge`/`abortWorktreeMerge`), base-branch sync (`worktreeSyncStatus`/`fastForwardWorktree`), feature integration branches (`createFeatureBranch`).
 - `lib/services.ts` — managed-services supervisor (detached process-group children owned by the server, log ring buffers, SSE status); `lib/service-router.mjs` + `lib/service-host.mjs` — public service-hostname reverse proxy + pure host/token helpers.
 - `lib/contextRefresh.ts` — "Refresh with AI" as a detached background job (poll via GET, never a long-held request); `lib/recap.ts` — staleness/activity sweep. Both are project-scoped one-shots that run on the utility agent via `lib/agents/oneshots.ts`. `lib/idle.ts` — busy-tracking so the idle daemon won't stop the container mid-work.
 - `lib/promptLimits.ts` / `lib/authFailure.ts` — the two *recoverable* turn failures, classified agent-agnostically from the error text. Each appends a durable notice to the persisted transcript line, which the UI matches verbatim to render one recovery button (`/clear` for context overflow, Reconnect for a dead login). A dead login additionally parks the pending queue (every follow-up would fail identically) and flags the agent instance-wide (`agent_auth_broken_<id>` in `lib/agents/connections.ts`, relayed on `/api/events` as an `agent_auth` event) so the titlebar banner shows in every tab; any successful turn clears it.
@@ -54,7 +71,7 @@ This is the **open-source repo** — the whole local app lives here and all core
 
 | What | Where |
 |-|-|
-| DB (projects, tasks, transcripts, summaries) | `orchestrator.db` in `ORCH_DB_DIR` (default `~/.zen-orchestrator`) |
+| DB (projects, features, tasks, transcripts, summaries) | `orchestrator.db` in `ORCH_DB_DIR` (default `~/.zen-orchestrator`) |
 | Per-task git worktrees | `ORCH_WORKTREES_DIR` (default `~/.agent-orchestrator/worktrees`) — deliberately **outside** every repo |
 | Cloned project repos | `ORCH_PROJECTS_DIR` (default `~/projects`) |
 
