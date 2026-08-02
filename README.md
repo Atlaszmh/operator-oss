@@ -32,6 +32,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 - **Pick your agent per task** — Claude Code or Codex, both on subscription logins.
 - **Model delegation** — when an agent plans work, it picks the model and thinking budget for each task it proposes, so a rename doesn't run on your most expensive model and a refactor doesn't fail on your cheapest. Its choice shows on the task card and is editable before the task starts.
 - **Optional feature layer** — group related tasks under a feature (project › feature › task). It carries context every task in it inherits, shows progress at a glance, and can own an integration branch its tasks base off and merge into, so the whole thing lands on `main` as one unit. Agents plan into it with `suggest_feature`. Entirely optional: a task with no feature behaves exactly as before.
+- **Autopilot** *(opt-in)* — approve a feature's plan once and it runs itself: tasks start in dependency order, each one gates on your test suite plus an independent reviewer agent before merging into the feature's integration branch, and the finished feature comes back as a single pull request. You're asked for exactly two things — approving the plan, and merging that PR. See [Autopilot](#autopilot).
 - **Outcome in plain language** — every session is asked to end its finished work with one business-facing sentence on what you actually got ("Customers can pay with Apple Pay", not "refactored `checkout.ts`"). It lands on the task card and stacks up on the feature page, so you can read what shipped without opening a single transcript.
 - **Write-once project context** — auto-injected into every task; **Refresh with AI** redrafts it from the repo.
 - **Session lineage** — `/clear` hands a summary to a fresh context window; the task lives on.
@@ -66,6 +67,29 @@ Want another agent? The driver seam is small — see [adding a new agent](docs/A
 ## Insights
 
 Open **Insights** from the top bar for a local analytics dashboard of what your agents cost and ship: per-day spend and token usage (including cache reads/writes), tasks shipped, and lines merged to base — sliceable by project and agent across 7/30/90-day ranges, with deltas against the prior period. Everything is computed from the local SQLite database in a single fetch, filter changes recompute instantly in the browser, and nothing is sent anywhere. Claude spend is the SDK-reported dollar figure; Codex spend is estimated from token counts at published API prices and marked with a `~`.
+
+## Autopilot
+
+Off by default. Set `ORCH_FEATURE_AUTOPILOT=1` to surface it.
+
+Most tasks don't need you. They need someone to start them, notice they finished, check the tests still pass, skim the diff, click merge, and start the next one. Autopilot does that part, and keeps you for the two decisions that are actually yours.
+
+**You approve the plan.** Open a task and talk to an agent until the spec is right — it writes the shared spec into the feature's context and files the breakdown with `suggest_feature` / `suggest_task({blocked_by})`. When you're happy, **Approve plan** on the feature page accepts every suggested task, cuts an integration branch off your project branch, and starts the queue.
+
+**Then it works.** Tasks whose dependencies have landed start in parallel, up to `ORCH_AUTOPILOT_CONCURRENCY` (default 2). When one finishes, it has to earn its merge:
+
+1. Your project's `test_command` runs **in that task's worktree** — not the shared checkout, so what's tested is exactly what's about to merge.
+2. A **separate reviewer agent** reads the diff against the task's brief and the feature spec, in the worktree, so it can open the files a hunk touches. It runs on the utility agent, never the one that wrote the code.
+
+Pass, and the task merges into the integration branch and the next one starts. Fail, and the reviewer's notes go straight back to the task as its next turn — twice by default (`ORCH_AUTOPILOT_ATTEMPTS`), then it stops and asks you. A merge conflict goes to the task's own agent to resolve, same as the manual flow.
+
+**You merge the PR.** When the last task lands, the integration branch is pushed and a PR opened against your project branch, its body assembled from the approved spec and every task's outcome line. Review it on GitHub, where CI and your review tools already live.
+
+**When it gets stuck**, the task shows up in the "N need you" pill you already watch, with the reason in full on the feature page. Reply to it — answering clears the block and it picks the task back up. A stuck task never stalls its siblings; only work that depended on it waits.
+
+**Start in shadow mode.** `ORCH_FEATURE_AUTOPILOT_SHADOW` is **on by default**: the full gate runs and records its verdict, but nothing merges without you. Leave it on until you've watched the reviewer judge a handful of tasks you'd also have judged. A reviewer that rubber-stamps has automated a rubber stamp, and this is the cheap way to find that out. Set it to `0` when you trust it.
+
+Autopilot never merges to your project branch, and it's per-feature — nothing you haven't approved runs.
 
 ## Managed services
 

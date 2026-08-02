@@ -52,7 +52,23 @@ Two deliberate departures worth knowing before you "fix" them:
 - **`ON DELETE SET NULL`, not CASCADE** — the one exception to "delete is hard delete". A feature is a label *over* tasks, not what they are; deleting the grouping must not destroy the work filed under it. Pinned by `tests/features.test.ts`.
 - **No `status` column** — progress is derived in `listFeatures()`. A stored status would need writing from every path that touches `tasks.status` and would drift the first time one was missed.
 
-`landBranch()` in `lib/git.ts` is `mergeTask` minus the commit step, split out so `mergeFeature` (no worktree to commit) lands through the same code. `worktreeSyncStatus`'s `worktreePath` is optional for the same reason — only the dirty check needs one. Feature-level merge conflicts are reported, not resolved in-app (marked with a `ponytail:` comment in the sync route).
+### Autopilot (opt-in, `ORCH_FEATURE_AUTOPILOT`)
+
+**`lib/autopilot.ts` walks an approved plan so the user doesn't have to.** Two human gates, and everything between them is machine-driven: `POST /api/features/[id]/approve-plan` (accept every suggestion, cut the integration branch, flip `features.autopilot`) and the PR the feature ends at (`features.pr_url`). Nothing else asks for a click.
+
+`sweep(projectId)` is the whole controller: gate every member that handed back, start ready members up to `AUTOPILOT_CONCURRENCY`, open the feature PR when the last one lands. **Driven by `subscribeGlobal()`'s `turn_end`, not a timer** — a turn ending is exactly when there's new work to consider. It's idempotent and serialized per project (a second caller marks the project dirty rather than racing), so the safety sweep on the recap cadence can overlap it freely. `ensureAutopilot()` arms the subscription from `/api/events` and the recap sweep, because `server.js` is plain CommonJS and there is no boot hook to use.
+
+**`readyMembers()` in `lib/store.ts` is the first consumer `task_dependencies` ever had** — the graph was always writable via `suggest_task({blocked_by})` and rendered as a badge, but nothing scheduled off it.
+
+**`lib/gates.ts` is what replaces a human reading the transcript**: `test_command` run in the **task's worktree** (NOT via `lib/services.ts`, which spawns in `repo_path` and would prove nothing about the branch being merged), then a reviewer one-shot. The reviewer is **project-scoped** through `lib/agents/oneshots.ts` so it runs on the utility agent, never the task's own — a model must not grade its own homework. A red suite short-circuits the review. `parseVerdict()` **fails closed**: an unparseable reply is a FAIL, because the alternative is a malformed review silently merging code. Marker and parser sit together in `shared.ts`, same rule as `OUTCOME_INSTRUCTION`/`extractOutcome`.
+
+Escalation is the `promptLimits`/`authFailure` durable-notice pattern: `tasks.blocked_reason` + `awaiting_input`, so a stuck task lights up the existing "N need you" pill with no new notification surface. **Any human message clears `blocked_reason` and `gate_attempts`** — answering it is how you resume it. Blocked tasks never stall siblings; their dependents simply never become ready.
+
+`startInitialTurn()` lives in `lib/runner.ts` beside `startResumeTurn()` because autopilot and `POST /messages` both need the identical claim → worktree → title+description sequence.
+
+Deliberate corners: a task is **not re-gated when its base moves during the gate** (CI on the feature PR is the arbiter of the combined state; re-gating would serialize the fan-out the cap exists to allow — marked with a `ponytail:` comment), and there is no `features.autopilot_state` column (derived in `listFeatures()`, same argument as the missing feature status). **Shadow mode (`ORCH_FEATURE_AUTOPILOT_SHADOW`, ON by default) gates but never merges** — enabling autopilot can't land code on its first run.
+
+`landBranch()` in `lib/git.ts` is `mergeTask` minus the commit step, split out so `mergeFeature` (no worktree to commit) lands through the same code. `createBranchPr()` is the same split in `lib/github.ts` — `createTaskPr` passes the worktree as `cwd`, a feature passes `repo_path`. `worktreeSyncStatus`'s `worktreePath` is optional for the same reason — only the dirty check needs one. Feature-level merge conflicts are reported, not resolved in-app (marked with a `ponytail:` comment in the sync route).
 
 ### Key modules (by responsibility)
 
