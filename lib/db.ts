@@ -48,9 +48,51 @@ export function init(db: Database.Database) {
       created_at  INTEGER NOT NULL
     );
 
+    -- The optional middle layer: a named group of tasks within one project
+    -- (project > feature > task). Everything about it is opt-in — a task with
+    -- feature_id NULL behaves exactly as it did before this table existed.
+    --
+    -- The context column is prepended to every member task's session after the
+    -- project's own context (see buildProjectContext in lib/agents/shared.ts),
+    -- so a spec is written once rather than retyped into each task.
+    --
+    -- The branch column is the opt-in integration branch: '' means member tasks
+    -- base off and merge into projects.branch exactly as they always have; a
+    -- value means they base off and merge into THIS branch, which is later
+    -- landed on the project branch as one unit (see taskBaseBranch in
+    -- lib/store.ts). base_sha is the commit it forked from; merged_at is when
+    -- it landed (0 = not yet).
+    --
+    -- No status column on purpose: progress is derived from member tasks
+    -- (listFeatures), so it can't drift from the tasks it describes. archived
+    -- mirrors projects.deprecated — hidden from the working set, restorable.
+    CREATE TABLE IF NOT EXISTS features (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      context     TEXT NOT NULL DEFAULT '',
+      color       TEXT NOT NULL DEFAULT '',
+      branch      TEXT NOT NULL DEFAULT '',
+      base_sha    TEXT NOT NULL DEFAULT '',
+      merged_at   INTEGER NOT NULL DEFAULT 0,
+      archived    INTEGER NOT NULL DEFAULT 0,
+      position    INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL,
+      -- Features are addressable by name within a project, which is what lets
+      -- suggest_task({feature: "Billing v2"}) resolve without an id.
+      UNIQUE(project_id, name)
+    );
+
     CREATE TABLE IF NOT EXISTS tasks (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      -- SET NULL, not CASCADE — a deliberate exception to the "delete is hard
+      -- delete" convention. A feature is a label OVER tasks, not what they are;
+      -- deleting an organizational mistake must not destroy the work filed
+      -- under it. Removing a feature un-groups its tasks, nothing more.
+      feature_id  TEXT REFERENCES features(id) ON DELETE SET NULL,
       title       TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       priority    TEXT NOT NULL DEFAULT 'med',
@@ -200,6 +242,7 @@ export function init(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_services_project ON services(project_id);
+    CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_dep ON task_dependencies(depends_on_id);
@@ -334,6 +377,15 @@ export function migrate(db: Database.Database) {
   if (!taskCols.includes("agent")) db.exec("ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'");
   // GitHub PR opened from this task's branch via "Create PR" ("" = none yet).
   if (!taskCols.includes("pr_url")) db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
+  // The optional feature this task belongs to (NULL = ungrouped, which is what
+  // every pre-feature task is). SQLite requires a NULL default when adding a
+  // column with a REFERENCES clause, which is exactly what we want anyway.
+  // The index goes here rather than the CREATE block above because on an
+  // existing DB the column doesn't exist until this line has run.
+  if (!taskCols.includes("feature_id")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN feature_id TEXT REFERENCES features(id) ON DELETE SET NULL");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_feature ON tasks(feature_id)");
   // Manual task ordering (list groups + board columns both render in position
   // order). Backfill matches the sort that was implicit before the column
   // existed — priority then created_at, per project — so an upgrade doesn't

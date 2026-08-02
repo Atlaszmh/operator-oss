@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask, listSummaries } from "@/lib/store";
+import { getTask, getProject, updateTask, listSummaries, taskBaseBranch } from "@/lib/store";
 import { commitWorktree } from "@/lib/git";
 import { createTaskPr, buildPrBody } from "@/lib/github";
 import { track } from "@/lib/analytics";
@@ -35,7 +35,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const result = await createTaskPr({
     worktreePath: task.worktree_path,
     workBranch: task.work_branch,
-    baseBranch: project.branch,
+    baseBranch: taskBaseBranch(task, project),
     title: task.title,
     body: buildPrBody({ description: task.description, summary: summaries[summaries.length - 1]?.summary, taskId: id }),
   });

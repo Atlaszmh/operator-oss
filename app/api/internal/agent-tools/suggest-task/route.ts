@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     blocked_by?: string[];
     model?: string;
     reasoning?: string;
+    feature?: string;
   };
   try {
     body = await req.json();
@@ -39,6 +40,9 @@ export async function POST(req: NextRequest) {
     // get identical treatment from one place.
     model: typeof body.model === "string" ? body.model : undefined,
     reasoning: typeof body.reasoning === "string" ? body.reasoning : undefined,
+    // Resolved (and auto-created) inside createSuggestedTask, so the bridge and
+    // the in-process server land on identical behaviour.
+    feature: typeof body.feature === "string" ? body.feature : undefined,
   });
   return NextResponse.json({ ok: true, id: task.id, title: task.title, text });
 }

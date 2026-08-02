@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { getTask, getProject, updateTask, addMessage, listMessages, listPendingMessages, addPendingMessage } from "@/lib/store";
+import { getTask, getProject, updateTask, addMessage, listMessages, listPendingMessages, addPendingMessage, taskBaseBranch } from "@/lib/store";
 import { startTurn, startResumeTurn } from "@/lib/runner";
 import { claimTurn, hasTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
@@ -101,7 +101,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       // point — a second POST landing in this window queues instead of double-running.
       if (!fresh.worktree_path || !fs.existsSync(fresh.worktree_path)) {
         try {
-          const wt = await ensureWorktree(project.repo_path, fresh.id);
+          // Fork from the task's OWN base — its feature's integration branch
+          // when it belongs to one, else the project branch. This is the only
+          // place a worktree is cut, so it's the only place that needs to know.
+          const wt = await ensureWorktree(project.repo_path, fresh.id, taskBaseBranch(fresh, project));
           if (wt) {
             fresh.worktree_path = wt.path;
             fresh.work_branch = wt.branch;

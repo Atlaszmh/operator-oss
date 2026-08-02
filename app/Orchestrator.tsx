@@ -10,13 +10,14 @@ import { TasksColumn } from "./orchestrator/TasksColumn";
 import { BoardWorkspace } from "./orchestrator/TaskBoard";
 import { SessionView } from "./orchestrator/SessionView";
 import { ProjectLanding } from "./orchestrator/ProjectLanding";
+import { FeatureLanding } from "./orchestrator/FeatureLanding";
 import { SettingsView } from "./orchestrator/SettingsView";
 import { InsightsView } from "./orchestrator/InsightsView";
 import { AppearancePanel } from "./orchestrator/AppearancePanel";
 import { ColResize, ColRail, TerminalDrawer, BootSkeleton } from "./orchestrator/Layout";
 import { ServicesDrawer } from "./orchestrator/Services";
 import { clientFeatures } from "@/lib/features";
-import { NewTaskModal, EditTaskModal, ContextModal, NewProjectModal, SessionsModal } from "./orchestrator/modals";
+import { NewTaskModal, EditTaskModal, ContextModal, NewProjectModal, NewFeatureModal, SessionsModal } from "./orchestrator/modals";
 import { OnboardingWizard } from "./orchestrator/OnboardingWizard";
 import { AgentNudge, AgentAuthBanner } from "./orchestrator/AgentConnect";
 import { WelcomeCoach, WelcomeNudge } from "./orchestrator/Welcome";
@@ -92,7 +93,7 @@ function MobileTerminalSheet({ cwd, port, visible, onClose }: { cwd: string; por
 
 export default function Orchestrator() {
   const o = useOrchestrator();
-  const { project, task, selProj, selTask, layout } = o;
+  const { project, task, feature, selProj, selTask, layout } = o;
   const isMobile = useIsMobile();
   const features = clientFeatures();
   const isDark = o.appearance.theme !== "light";
@@ -192,11 +193,11 @@ export default function Orchestrator() {
       onBack={isMobile ? () => window.history.back() : undefined}
       width={layout.taskW}
       onCollapse={() => o.setLayout((l) => ({ ...l, taskCollapsed: true }))}
-      project={project} agents={o.agents} tasks={o.realTasks} suggested={o.suggested} selTaskId={selTask} running={o.running} blockedBy={o.blockedBy}
+      project={project} agents={o.agents} features={o.features} tasks={o.realTasks} suggested={o.suggested} selTaskId={selTask} running={o.running} blockedBy={o.blockedBy}
       loading={o.tasksLoading}
       view={o.taskView} onSetView={setTaskView} onMoveTask={o.moveTask}
-      onSelectTask={o.setSelTask} onNewTask={() => o.setModal("task")} onEditContext={() => o.setModal("context")}
-      onShowSessions={() => o.setModal("sessions")} onShowRecap={() => o.setSelTask(null)} onEditTask={o.setEditId}
+      onSelectTask={o.setSelTask} onSelectFeature={o.selectFeature} onNewTask={() => o.setModal("task")} onNewFeature={() => o.setModal("feature")} onEditContext={() => o.setModal("context")}
+      onShowSessions={() => o.setModal("sessions")} onShowRecap={() => { o.setSelTask(null); o.selectFeature(null); }} onEditTask={o.setEditId}
       onStartSuggestion={o.startSuggestion} onAcceptSuggestion={o.acceptSuggestion} onDismissSuggestion={o.dismissSuggestion}
     />
   );
@@ -230,6 +231,21 @@ export default function Orchestrator() {
             railCollapsed={layout.railCollapsed}
             onRailCollapse={() => o.setLayout((l) => ({ ...l, railCollapsed: true }))}
             onRailExpand={() => o.setLayout((l) => ({ ...l, railCollapsed: false }))}
+          />
+        ) : feature && project ? (
+          // A task outranks a feature here, and a feature outranks the project
+          // landing — the three are mutually exclusive by construction (see
+          // selectTask/selectFeature in useOrchestrator).
+          <FeatureLanding
+            key={feature.id}
+            feature={feature}
+            project={project}
+            tasks={o.tasks.filter((t) => t.feature_id === feature.id)}
+            onSelectTask={o.setSelTask}
+            onNewTask={() => o.setModal("task")}
+            onSave={o.saveFeature}
+            onDelete={o.removeFeature}
+            onRefresh={() => void o.refreshTasks()}
           />
         ) : project ? (
           <ProjectLanding
@@ -276,7 +292,7 @@ export default function Orchestrator() {
   // Services/Terminal toggles keep working while the board is up).
   const boardWorkspace = project && (
     <BoardWorkspace
-      project={project} agents={o.agents} tasks={o.realTasks} suggested={o.suggested}
+      project={project} agents={o.agents} features={o.features} tasks={o.realTasks} suggested={o.suggested}
       selTaskId={selTask} running={o.running} blockedBy={o.blockedBy} loading={o.tasksLoading}
       onSetView={setTaskView} onMoveTask={o.moveTask}
       onSelectTask={openBoardTask} onNewTask={() => o.setModal("task")} onEditContext={() => o.setModal("context")}
@@ -540,9 +556,12 @@ export default function Orchestrator() {
         )}
       </div>
 
-      {o.modal === "task" && project && <NewTaskModal project={project} agents={o.agents} tasks={o.realTasks} onClose={() => o.setModal(null)} onCreate={o.createTask} onOpenSetup={o.rerunOnboarding} />}
+      {/* defaultFeature: opening "+ Task" from a feature page files into that
+          feature rather than making you re-pick it. */}
+      {o.modal === "task" && project && <NewTaskModal project={project} agents={o.agents} features={o.activeFeatures} defaultFeature={o.selFeature} tasks={o.realTasks} onClose={() => o.setModal(null)} onCreate={o.createTask} onOpenSetup={o.rerunOnboarding} />}
+      {o.modal === "feature" && project && <NewFeatureModal project={project} onClose={() => o.setModal(null)} onCreate={o.createFeature} />}
       {o.editId && o.tasks.find((t) => t.id === o.editId) && (
-        <EditTaskModal task={o.tasks.find((t) => t.id === o.editId)!} tasks={o.realTasks} agents={o.agents} onClose={() => o.setEditId(null)} onSave={o.saveTask} onDelete={o.removeTask} />
+        <EditTaskModal task={o.tasks.find((t) => t.id === o.editId)!} tasks={o.realTasks} agents={o.agents} features={o.features} onClose={() => o.setEditId(null)} onSave={o.saveTask} onDelete={o.removeTask} />
       )}
       {o.modal === "context" && project && <ContextModal project={project} agents={o.agents} onSetDefaultAgent={o.setProjectDefaultAgent} onClose={() => o.setModal(null)} onSave={o.saveContext} onDelete={() => o.removeProject(project.id)} onDeprecate={() => o.setDeprecated(project.id, true)} />}
       {o.modal === "project" && <NewProjectModal onClose={() => o.setModal(null)} onCreate={o.createProject} />}

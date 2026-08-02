@@ -5,7 +5,7 @@ import type { Priority } from "@/lib/types";
 import { Icon } from "../icons";
 import { jget, jsend } from "./api";
 import { relTime, duration } from "./format";
-import { SLABEL, modelOptions, reasoningOptions, type ProjectRow, type ProjectSession, type TaskRow, type AgentsBundle, type PickerOption } from "./types";
+import { SLABEL, modelOptions, reasoningOptions, type FeatureRow, type ProjectRow, type ProjectSession, type TaskRow, type AgentsBundle, type PickerOption } from "./types";
 import { agentLabel, capsFor, defaultAgentFor, findAgent } from "./agents";
 import { StatusDot, Skel, ErrNote } from "./shared";
 import { Modal, BrowseDirButton, PrioritySeg, DepPicker } from "./Modal";
@@ -83,7 +83,36 @@ export function RunSelect({ label, options, value, onChange }: {
   );
 }
 
-export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpenSetup }: { project: ProjectRow; agents: AgentsBundle; tasks: TaskRow[]; onClose: () => void; onCreate: (i: { title: string; desc: string; priority: Priority; agent: string; model: string | null; reasoning: string | null; startNow: boolean; depends_on: string[] }) => void; onOpenSetup?: () => void }) {
+// Which feature (if any) a task belongs to. Rendered only when the project has
+// features — the layer is optional, so a project that doesn't use it never sees
+// a picker for it. Archived features are excluded, except the one already
+// assigned, so re-opening a task filed under an archived feature doesn't
+// silently move it.
+export function FeaturePicker({ features, value, onChange }: {
+  features: FeatureRow[]; value: string | null; onChange: (v: string | null) => void;
+}) {
+  const options = features.filter((f) => !f.archived || f.id === value);
+  if (options.length === 0) return null;
+  const sel = options.find((f) => f.id === value);
+  return (
+    <div className="field">
+      <div className="lab">Feature <span className="opt">— optional grouping</span></div>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">No feature</option>
+        {options.map((f) => <option key={f.id} value={f.id}>{f.name}{f.archived ? " (archived)" : ""}</option>)}
+      </select>
+      <div className="hlp">
+        {sel?.context
+          ? `"${sel.name}" context is prepended to this task's prompt, after the project context.`
+          : sel
+            ? `Groups with "${sel.name}". It has no feature context yet.`
+            : "Group related tasks so they share context and can ship together."}
+      </div>
+    </div>
+  );
+}
+
+export function NewTaskModal({ project, agents, features, defaultFeature, tasks, onClose, onCreate, onOpenSetup }: { project: ProjectRow; agents: AgentsBundle; features: FeatureRow[]; defaultFeature?: string | null; tasks: TaskRow[]; onClose: () => void; onCreate: (i: { title: string; desc: string; priority: Priority; agent: string; model: string | null; reasoning: string | null; feature_id: string | null; startNow: boolean; depends_on: string[] }) => void; onOpenSetup?: () => void }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState<Priority>("med");
@@ -92,6 +121,9 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   const [reasoning, setReasoning] = useState<string | null>(null);
   const [startNow, setStartNow] = useState(false);
   const [deps, setDeps] = useState<string[]>([]);
+  // Pre-filled when the modal is opened FROM a feature page, so "+ Task" there
+  // files into that feature instead of making you pick it again.
+  const [featureId, setFeatureId] = useState<string | null>(defaultFeature ?? null);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
   // The bundle can arrive after mount; adopt the resolved default until the user picks.
@@ -109,7 +141,7 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   const selAgent = findAgent(agents, agent);
   const agentReady = selAgent ? selAgent.authenticated : true;
   const canStart = !blocked && agentReady;
-  const create = () => can && onCreate({ title: title.trim(), desc: desc.trim(), priority, agent, model, reasoning, startNow: startNow && canStart, depends_on: deps });
+  const create = () => can && onCreate({ title: title.trim(), desc: desc.trim(), priority, agent, model, reasoning, feature_id: featureId, startNow: startNow && canStart, depends_on: deps });
   return (
     <Modal title="New task" sub={`${project.name} · title + description become ${agentLabel(agents, agent)}'s first prompt`} onClose={onClose}
       footer={<>
@@ -131,6 +163,7 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
         <textarea value={desc} placeholder="Describe the feature or task. This is the body of the prompt the agent starts with." onChange={(e) => setDesc(e.target.value)} />
         <div className="hlp">Project context is prepended automatically — no need to restate the stack or conventions.</div>
       </div>
+      <FeaturePicker features={features} value={featureId} onChange={setFeatureId} />
       <AgentPicker agents={agents} value={agent} onChange={pickAgent} onConnect={onOpenSetup} />
       <RunSelect label="Model" options={modelOptions(caps)} value={model} onChange={setModel} />
       <RunSelect label="Reasoning" options={reasoningOptions(caps)} value={reasoning} onChange={setReasoning} />
@@ -143,14 +176,15 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   );
 }
 
-export function EditTaskModal({ task, tasks, agents, onClose, onSave, onDelete }: {
-  task: TaskRow; tasks: TaskRow[]; agents: AgentsBundle; onClose: () => void;
-  onSave: (id: string, patch: { title: string; description: string; priority: Priority; model: string | null; reasoning: string | null; depends_on: string[] }) => void;
+export function EditTaskModal({ task, tasks, agents, features, onClose, onSave, onDelete }: {
+  task: TaskRow; tasks: TaskRow[]; agents: AgentsBundle; features: FeatureRow[]; onClose: () => void;
+  onSave: (id: string, patch: { title: string; description: string; priority: Priority; model: string | null; reasoning: string | null; feature_id: string | null; depends_on: string[] }) => void;
   onDelete: (id: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [desc, setDesc] = useState(task.description);
   const [priority, setPriority] = useState<Priority>(task.priority);
+  const [featureId, setFeatureId] = useState<string | null>(task.feature_id);
   const [deps, setDeps] = useState<string[]>(task.depends_on ?? []);
   const [model, setModel] = useState<string | null>(task.model);
   const [reasoning, setReasoning] = useState<string | null>(task.reasoning);
@@ -161,7 +195,7 @@ export function EditTaskModal({ task, tasks, agents, onClose, onSave, onDelete }
   useEffect(() => { ref.current?.focus(); }, []);
   const can = title.trim().length > 0;
   const candidates = useMemo(() => tasks.filter((t) => t.id !== task.id), [tasks, task.id]);
-  const save = () => can && onSave(task.id, { title: title.trim(), description: desc.trim(), priority, model, reasoning, depends_on: deps });
+  const save = () => can && onSave(task.id, { title: title.trim(), description: desc.trim(), priority, model, reasoning, feature_id: featureId, depends_on: deps });
   return (
     <Modal title="Edit task" sub="title + description become the agent's first prompt" onClose={onClose}
       footer={<>
@@ -188,6 +222,7 @@ export function EditTaskModal({ task, tasks, agents, onClose, onSave, onDelete }
         <div className="lab">Priority</div>
         <PrioritySeg value={priority} onChange={setPriority} />
       </div>
+      <FeaturePicker features={features} value={featureId} onChange={setFeatureId} />
       <RunSelect label="Model" options={modelOptions(caps)} value={model} onChange={setModel} />
       <RunSelect label="Reasoning" options={reasoningOptions(caps)} value={reasoning} onChange={setReasoning} />
       <DepPicker candidates={candidates} value={deps} onChange={setDeps} />
@@ -196,6 +231,58 @@ export function EditTaskModal({ task, tasks, agents, onClose, onSave, onDelete }
           This permanently removes “{task.title}”, its agent session and git worktree from the orchestrator. Any unmerged work in the worktree is discarded.
         </div>
       )}
+    </Modal>
+  );
+}
+
+export function NewFeatureModal({ project, onClose, onCreate }: {
+  project: ProjectRow; onClose: () => void;
+  onCreate: (i: { name: string; description: string; context: string }) => void | Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [context, setContext] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  const can = name.trim().length > 0 && !busy;
+  const create = async () => {
+    if (!can) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onCreate({ name: name.trim(), description: description.trim(), context: context.trim() });
+    } catch (e) {
+      // The likely failure is a 409 on the project-unique name — show it here
+      // rather than closing over a silent no-op.
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="New feature" sub={`${project.name} · groups related tasks and shares context between them`} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-accent" disabled={!can} onClick={create}>{Icon.plus()} Create feature</button>
+      </>}>
+      <div className="field">
+        <div className="lab">Name</div>
+        <input ref={ref} type="text" value={name} placeholder="e.g. Billing v2"
+          onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && can) void create(); }} />
+        <div className="hlp">Unique within this project. Agents can file tasks into it by this name.</div>
+      </div>
+      <div className="field">
+        <div className="lab">Description <span className="opt">— one line</span></div>
+        <input type="text" value={description} placeholder="e.g. Move subscriptions from Paddle to Stripe" onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <div className="field">
+        <div className="lab">Feature context <span className="opt">— optional, shared by every task here</span></div>
+        <textarea value={context} placeholder="The shared spec: data model, constraints, decisions every task in this feature needs." onChange={(e) => setContext(e.target.value)} />
+        <div className="hlp">Prepended to each member task&apos;s prompt after the project context — so write it once here instead of in every description. It is re-sent on every turn, so keep it spec-sized.</div>
+      </div>
+      {err && <ErrNote>{err}</ErrNote>}
     </Modal>
   );
 }

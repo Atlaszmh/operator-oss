@@ -1497,3 +1497,152 @@ button.tpeek-more:hover{color:var(--accent-ink);}
   .in-head{margin-bottom:16px;}
   .in-dd{min-width:0;flex:1;}
 }
+
+/* ============================== features ==============================
+   The optional project > feature > task layer. Feature groups sit above the
+   status groups in the tasks column; the feature page fills the session
+   column the way ProjectLanding does, one level down. */
+
+/* --- the chip shown on task cards outside their own feature group --- */
+.feat-chip{
+  display:inline-flex;align-items:center;max-width:100%;padding:2px 7px;border-radius:99px;
+  font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.03em;line-height:1.4;
+  border:1px solid var(--line-strong);color:var(--ink-3);background:var(--surface-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.feat-chip.is-btn{cursor:pointer;transition:background .12s,color .12s;}
+.feat-chip.is-btn:hover{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent);}
+.task-feat{margin-top:7px;}
+
+/* --- feature group header in the tasks column --- */
+.feat-group-h{
+  --feat-accent:var(--accent);
+  display:flex;align-items:center;gap:7px;margin:12px 0 6px;padding:6px 8px 6px 4px;
+  border-radius:var(--r);background:var(--surface-2);border:1px solid var(--line-2);
+  border-left:2px solid var(--feat-accent);position:relative;
+}
+.feat-group-h .fgh-chev{
+  flex:0 0 auto;width:20px;height:20px;display:grid;place-items:center;
+  background:none;border:0;color:var(--ink-4);cursor:pointer;border-radius:5px;
+}
+.feat-group-h .fgh-chev:hover{background:var(--line);color:var(--ink-2);}
+.feat-group-h .tgh-chev{transition:transform .15s;font-size:13px;}
+.feat-group-h.is-collapsed .tgh-chev{transform:rotate(-90deg);}
+.feat-group-h .fgh-name{
+  flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;
+  background:none;border:0;cursor:pointer;text-align:left;padding:0;color:inherit;
+}
+.feat-group-h .fgh-title{
+  font-size:12px;font-weight:700;letter-spacing:-.01em;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.feat-group-h .fgh-name:hover .fgh-title{color:var(--accent-ink);}
+.feat-group-h .fgh-branch{
+  display:inline-flex;align-items:center;gap:3px;flex:0 1 auto;min-width:0;
+  font-family:var(--mono);font-size:9px;color:var(--ink-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.feat-group-h .fgh-branch svg{width:10px;height:10px;flex:0 0 auto;}
+.feat-group-h .fgh-count{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--ink-3);flex:0 0 auto;}
+.feat-group-h .fgh-sug{
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;
+  background:var(--accent-soft);color:var(--accent-ink);flex:0 0 auto;
+}
+.feat-group-h .fgh-await{
+  font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;
+  background:var(--blue-soft);color:var(--blue);flex:0 0 auto;
+}
+/* Progress hairline along the bottom edge — readable at a glance, no height cost. */
+.feat-group-h .fgh-bar{position:absolute;left:0;right:0;bottom:-1px;height:2px;overflow:hidden;border-radius:0 0 var(--r) var(--r);}
+.feat-group-h .fgh-bar > span{display:block;height:100%;background:var(--feat-accent);transition:width .25s;}
+
+/* --- suggested tray, sub-grouped by feature --- */
+.sug-feat-h{
+  display:flex;align-items:center;gap:7px;padding:7px 13px 4px;
+  font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--accent-ink);border-top:1px solid rgba(194,96,60,.18);
+}
+[data-theme="dark"] .sug-feat-h{color:#D98C6A;}
+.sug-feat-h .sp{margin-left:auto;font-weight:600;}
+.sug-feat-block .sug:first-of-type{border-top:0;}
+
+/* --- the feature page (session column) --- */
+.feat-page{margin:18px 0;border:1px solid var(--line-2);border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-1);padding:18px 20px 16px;}
+.feat-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.feat-badge{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:99px;flex:0 0 auto;
+  font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  border:1px solid var(--accent);color:var(--accent-ink);background:var(--accent-soft);
+}
+.feat-badge svg{width:11px;height:11px;}
+.feat-title{font-size:19px;font-weight:700;letter-spacing:-.02em;margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.feat-desc{font-size:13px;color:var(--ink-2);margin-bottom:14px;line-height:1.5;}
+.feat-page .inp{
+  width:100%;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--raise);
+  padding:9px 12px;font-family:var(--sans);font-size:13.5px;color:var(--ink);outline:none;margin-bottom:10px;
+}
+.feat-page .feat-name-inp{font-size:17px;font-weight:700;margin-bottom:0;}
+.feat-page .feat-ctx-inp{font-family:var(--mono);font-size:12px;line-height:1.55;resize:vertical;min-height:150px;}
+
+.feat-stats{display:flex;align-items:center;gap:10px;margin:4px 0 18px;flex-wrap:wrap;}
+.feat-bar{flex:1;min-width:120px;height:4px;border-radius:99px;background:var(--line);overflow:hidden;}
+.feat-bar > span{display:block;height:100%;background:var(--accent);transition:width .25s;}
+.feat-ratio{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--ink-2);flex:0 0 auto;}
+.feat-stat{font-family:var(--mono);font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:99px;flex:0 0 auto;}
+.feat-stat.sug{background:var(--accent-soft);color:var(--accent-ink);}
+.feat-stat.await{background:var(--blue-soft);color:var(--blue);}
+
+.feat-sect{border-top:1px solid var(--line);padding-top:14px;margin-top:16px;}
+.feat-sect-h{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;
+  font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+}
+.feat-sect-h .gcount{color:var(--ink-4);}
+.feat-hint{flex-basis:100%;font-family:var(--sans);font-size:11px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--ink-4);line-height:1.45;}
+.feat-ctx{
+  font-family:var(--mono);font-size:12px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r);padding:11px 13px;margin:0;max-height:340px;overflow:auto;
+}
+.feat-ctx.empty-ctx{font-family:var(--sans);color:var(--ink-4);font-style:italic;}
+.feat-actions{display:flex;gap:8px;margin-top:12px;}
+.feat-empty{font-size:12.5px;color:var(--ink-4);padding:6px 0;}
+
+.feat-tasks{display:flex;flex-direction:column;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;}
+.feat-task{
+  display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--line);
+  background:var(--surface);text-align:left;width:100%;cursor:pointer;transition:background .12s;
+}
+.feat-task:last-child{border-bottom:0;}
+.feat-task:hover{background:var(--surface-2);}
+.feat-task .ft-title{flex:1;min-width:0;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.feat-task .ft-sug{font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);flex:0 0 auto;}
+.feat-task .ft-status,.feat-task .ft-time{font-family:var(--mono);font-size:9.5px;color:var(--ink-4);flex:0 0 auto;}
+
+.feat-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:16px;padding-top:14px;}
+.feat-warn{font-size:12px;color:var(--ink-2);}
+.feat-del{color:var(--red);border-color:var(--red);}
+.feat-del:hover{background:var(--red-soft);color:var(--red);}
+/* Beat the .btn-danger height, which is declared later in the file than .btn-sm. */
+.btn-danger.btn-sm{height:28px;padding:0 10px;font-size:12px;}
+
+/* --- integration branch panel --- */
+.feat-branch-off .fb-copy{font-size:12.5px;color:var(--ink-2);line-height:1.55;margin-bottom:12px;}
+.feat-branch-off code,.feat-branch code{font-family:var(--mono);font-size:11.5px;background:var(--surface-2);border:1px solid var(--line-2);border-radius:5px;padding:1px 5px;}
+.fb-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+.fb-name{display:inline-flex;align-items:center;gap:5px;}
+.fb-name svg{width:11px;height:11px;}
+.fb-arrow{color:var(--ink-4);font-size:13px;}
+.fb-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.fb-stat{font-family:var(--mono);font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:99px;background:var(--surface-2);color:var(--ink-3);}
+.fb-stat.behind{background:var(--amber-soft);color:#9A6E14;}
+[data-theme="dark"] .fb-stat.behind{color:#DCB458;}
+.fb-stat.ahead{background:var(--accent-soft);color:var(--accent-ink);}
+.fb-stat.conflict{background:var(--red-soft);color:var(--red);}
+.fb-stat.ok{background:var(--surface-2);color:var(--ink-4);}
+.fb-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.fb-note{font-size:11.5px;color:var(--ink-4);line-height:1.5;margin-top:10px;}
+.fb-ok{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-2);margin-top:10px;}
+.fb-ok svg{width:13px;height:13px;flex:0 0 auto;}
+.fb-shipped{display:inline-flex;align-items:center;gap:4px;margin-left:auto;font-family:var(--mono);font-size:9.5px;font-weight:700;color:var(--ink-4);text-transform:none;letter-spacing:0;}
+.fb-shipped svg{width:11px;height:11px;}
+.bws-feat{height:28px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--surface);color:var(--ink-2);font-size:12px;padding:0 8px;flex:0 0 auto;max-width:170px;}

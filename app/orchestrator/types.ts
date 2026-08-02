@@ -24,9 +24,29 @@ export interface ProjectRow {
   awaiting_count: number; // in-progress tasks waiting on the user (across this project)
   cost_usd: number; // cumulative dollar spend across all this project's tasks
 }
+// The optional project > feature > task layer. Mirrors lib/store.ts
+// listFeatures(): the table's columns plus the rollup derived from member tasks.
+export interface FeatureRow {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  context: string; // prepended to member tasks' sessions, after project context
+  color: string; // "" = inherit the project's accent
+  branch: string; // integration branch ("" = members use the project branch)
+  base_sha: string;
+  merged_at: number; // 0 = the integration branch hasn't landed yet
+  archived: number; // 1 = hidden from the working set (mirrors project.deprecated)
+  position: number;
+  total: number; // members that are neither suggested nor cancelled
+  done: number; // members with status 'done'
+  suggested_count: number; // members still in the suggested tray
+  awaiting_count: number; // members waiting on the user right now
+}
 export interface TaskRow {
   id: string;
   project_id: string;
+  feature_id: string | null; // optional grouping; null = ungrouped
   title: string;
   description: string;
   priority: Priority;
@@ -108,6 +128,23 @@ export interface RecapInfo {
   // Client-side only: set when the fetch/generate failed, so the landing pane
   // can offer a retry instead of silently showing nothing.
   error?: string;
+}
+
+// Divergence of a feature's integration branch from the project branch, plus
+// what shipping it would hit (GET /api/features/:id/branch). `worktreeBlockers`
+// is non-empty when member tasks hold live worktrees, which freezes the branch
+// setting; `unfinished` is the advisory ship guard.
+export interface FeatureBranchResp {
+  branch: string;
+  baseBranch: string;
+  merged_at: number;
+  behind?: number;
+  ahead?: number;
+  canFastForward?: boolean;
+  clean?: boolean;
+  conflicts?: string[];
+  worktreeBlockers: { id: string; title: string }[];
+  unfinished: { id: string; title: string }[];
 }
 
 // Divergence status for the reopened-task sync banner (GET /api/tasks/:id/sync).

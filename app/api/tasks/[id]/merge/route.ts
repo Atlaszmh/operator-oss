@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask, recordTaskMerge } from "@/lib/store";
+import { getTask, getProject, updateTask, recordTaskMerge, taskBaseBranch } from "@/lib/store";
 import { mergeTask } from "@/lib/git";
 import { track } from "@/lib/analytics";
 import { hasTurn } from "@/lib/abort";
@@ -29,7 +29,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       repoPath: project.repo_path,
       worktreePath: task.worktree_path,
       workBranch: task.work_branch,
-      baseBranch: project.branch,
+      baseBranch: taskBaseBranch(task, project),
       message: `${task.title} (orchestrator task ${task.id})`,
     });
 

@@ -7,7 +7,7 @@
 import type { Project, Task, AskQuestion, AskAnswers, ToolPeek, DiffLine } from "../types";
 import type { AgentCapabilities, AgentModelOption, ModelTier } from "./types";
 import { getCapabilities } from "./capabilities";
-import { listSummaries } from "../store";
+import { listSummaries, getFeature, listFeatures, taskBaseBranch } from "../store";
 
 // ---------- suggest_task delegation guidance ----------
 //
@@ -96,7 +96,19 @@ export function buildProjectContext(project: Project, task: Task): string {
   const lines: string[] = [];
   lines.push(`You are working inside the project "${project.name}".`);
   if (ctx) lines.push(`\nWhat we're building (project context):\n${ctx}`);
-  if (project.branch) lines.push(`\nGit branch: ${project.branch}`);
+  // The optional middle layer. Only the feature's own `context` is emitted —
+  // `description` is a UI label. This block lands in EVERY turn of EVERY member
+  // task, so it's the same token economics as project context, one level down.
+  const feature = task.feature_id ? getFeature(task.feature_id) : undefined;
+  if (feature) {
+    lines.push(`\nThis task is part of the feature "${feature.name}".`);
+    if (feature.context) lines.push(`Feature context:\n${feature.context}`);
+  }
+  // The task's EFFECTIVE base — a feature's integration branch when it has one.
+  // Reporting project.branch unconditionally (as this did before features) would
+  // actively mislead a session working on a feature branch.
+  const baseBranch = taskBaseBranch(task, project);
+  if (baseBranch) lines.push(`\nGit branch: ${baseBranch}`);
   lines.push(`\n---\nThe current task is: "${task.title}"`);
   if (task.description) lines.push(`Task details: ${task.description}`);
 
@@ -117,6 +129,23 @@ export function buildProjectContext(project: Project, task: Task): string {
       `Create as many as the plan needs.\n` +
       `2. Proactively — if you notice follow-up work that is out of scope for the CURRENT ` +
       `task, don't do it now; propose it with \`suggest_task\` instead.`
+  );
+  // Group a breakdown instead of scattering it. Existing feature names are
+  // listed so a planner extends one rather than inventing a near-duplicate —
+  // the same reason the delegation guidance lists real model values.
+  const existing = listFeatures(project.id).filter((f) => !f.archived);
+  lines.push(
+    `\nWhen a breakdown is ONE coherent piece of work rather than unrelated errands, group it: ` +
+      `call \`suggest_feature(name, description, context)\` FIRST with the shared spec — the ` +
+      `data model, constraints and decisions every task in it needs — then pass that name as ` +
+      `\`feature\` on each \`suggest_task\`. Feature context is prepended to every member task's ` +
+      `session, so writing it once there beats repeating it in twenty task descriptions. Keep it ` +
+      `spec-sized: it's re-sent on every turn of every task in the feature.` +
+      (existing.length
+        ? `\nFeatures that already exist in this project (reuse a name to file work into it, ` +
+          `and calling \`suggest_feature\` with an existing name UPDATES it rather than duplicating): ` +
+          existing.map((f) => `"${f.name}"`).join(", ") + `.`
+        : ``)
   );
   // Model/reasoning routing for the tasks it proposes. Built from the agent the
   // SUGGESTED task will run under — suggest_task sets no agent, so createTask

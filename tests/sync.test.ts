@@ -80,12 +80,24 @@ describe("worktreeSyncStatus", () => {
     expect(s).toEqual({ behind: 0, ahead: 0, isDirty: false, canFastForward: false, clean: true, conflicts: [], baseTip: "" });
   });
 
-  it("returns the inert status for missing worktree/branch inputs", async () => {
+  it("returns the inert status for a missing or unknown branch", async () => {
     const { repo, wt } = await makeRepoWithWorktree(ensureWorktree);
     const none = { behind: 0, ahead: 0, isDirty: false, canFastForward: false, clean: true, conflicts: [], baseTip: "" };
-    expect(await worktreeSyncStatus({ repoPath: repo, worktreePath: "", workBranch: wt.branch, baseBranch: "main" })).toEqual(none);
     expect(await worktreeSyncStatus({ repoPath: repo, worktreePath: wt.path, workBranch: "", baseBranch: "main" })).toEqual(none);
     expect(await worktreeSyncStatus({ repoPath: repo, worktreePath: wt.path, workBranch: "orch/ghost", baseBranch: "main" })).toEqual(none);
+  });
+
+  it("still answers with no worktree path — only the dirty check needs one", async () => {
+    // A feature's integration branch has no worktree, so an absent path means
+    // "skip the dirty check", not "give up". Everything else here is branch
+    // arithmetic over repoPath. (Callers with a real task guard on work_branch
+    // before getting here — see app/api/tasks/[id]/sync/route.ts.)
+    const { repo, wt } = await makeRepoWithWorktree(ensureWorktree);
+    const s = await worktreeSyncStatus({ repoPath: repo, workBranch: wt.branch, baseBranch: "main" });
+    expect(s.isDirty).toBe(false);
+    expect(s.behind).toBe(0);
+    expect(s.ahead).toBe(0);
+    expect(s.baseTip).toBe(await git(repo, "rev-parse", "main"));
   });
 });
 

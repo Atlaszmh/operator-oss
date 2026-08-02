@@ -23,7 +23,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SUGGEST_TASK, EXPOSE_SERVICE, ASK_USER } from "../lib/agentToolDefs.mjs";
+import { SUGGEST_TASK, SUGGEST_FEATURE, EXPOSE_SERVICE, ASK_USER } from "../lib/agentToolDefs.mjs";
 
 const TASK_ID = process.env.ORCH_TASK_ID || "";
 const PROJECT_ID = process.env.ORCH_PROJECT_ID || "";
@@ -88,14 +88,33 @@ server.registerTool(
       // exists to prevent. The app validates in createSuggestedTask.
       model: z.string().optional().describe(SUGGEST_TASK.params.model),
       reasoning: z.string().optional().describe(SUGGEST_TASK.params.reasoning),
+      feature: z.string().optional().describe(SUGGEST_TASK.params.feature),
     },
   },
-  async ({ title, description, priority, blocked_by, model, reasoning }) => {
+  async ({ title, description, priority, blocked_by, model, reasoning, feature }) => {
     // Resolve refs (id passes through; a title from earlier this turn → its id)
     // before handing off — the endpoint just forwards ids to setTaskDeps.
+    // `feature` is NOT resolved here: it's a project-scoped name lookup that
+    // needs the DB, so the endpoint owns it (see resolveFeature in agentTools).
     const deps = (blocked_by ?? []).map((ref) => createdByTitle.get(ref) ?? ref);
-    const data = await callInternal("suggest-task", { title, description, priority, blocked_by: deps, model, reasoning });
+    const data = await callInternal("suggest-task", { title, description, priority, blocked_by: deps, model, reasoning, feature });
     if (data.id) createdByTitle.set(title, data.id);
+    return { content: [{ type: "text", text: data.text }] };
+  }
+);
+
+server.registerTool(
+  SUGGEST_FEATURE.name,
+  {
+    description: SUGGEST_FEATURE.description,
+    inputSchema: {
+      name: z.string().describe(SUGGEST_FEATURE.params.name),
+      description: z.string().optional().describe(SUGGEST_FEATURE.params.description),
+      context: z.string().optional().describe(SUGGEST_FEATURE.params.context),
+    },
+  },
+  async ({ name, description, context }) => {
+    const data = await callInternal("suggest-feature", { name, description, context });
     return { content: [{ type: "text", text: data.text }] };
   }
 );

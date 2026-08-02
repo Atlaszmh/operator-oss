@@ -56,6 +56,25 @@ export function AgentBadge({ label, multi }: { label: string; multi: boolean }) 
   return <span className="agent-badge" title={`Runs on ${label}`}>{label}</span>;
 }
 
+// Which feature a task belongs to. Rendered on cards in both list and board
+// views so the grouping stays visible even where the list isn't grouped by it
+// (board view, search results, the "Needs your input" pin). Null feature =
+// nothing rendered, which is every task on a project that uses no features.
+export function FeatureChip({ name, color, onClick }: { name?: string; color?: string; onClick?: () => void }) {
+  if (!name) return null;
+  const style = color ? { borderColor: color, color } : undefined;
+  if (!onClick) return <span className="feat-chip" style={style} title={`Feature: ${name}`}>{name}</span>;
+  return (
+    <span
+      className="feat-chip is-btn" style={style} title={`Open feature: ${name}`} role="button" tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onClick(); } }}
+    >
+      {name}
+    </span>
+  );
+}
+
 // ---- async-state primitives (pair with the .spinner/.load-note/.skel/.err-note
 // styles in globals.css) — every panel that fetches uses these, so loading and
 // error presentation stays uniform across the app. ----

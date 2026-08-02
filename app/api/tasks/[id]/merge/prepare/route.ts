@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask } from "@/lib/store";
+import { getTask, getProject, updateTask, taskBaseBranch } from "@/lib/store";
 import { prepareWorktreeMerge, completeWorktreeMerge } from "@/lib/git";
 import { buildConflictPrompt } from "@/lib/agents/shared";
 import { hasTurn } from "@/lib/abort";
@@ -31,7 +31,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const prep = await prepareWorktreeMerge({
       repoPath: project.repo_path,
       worktreePath: task.worktree_path,
-      baseBranch: project.branch,
+      baseBranch: taskBaseBranch(task, project),
       message,
     });
 
@@ -43,7 +43,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         repoPath: project.repo_path,
         worktreePath: task.worktree_path,
         workBranch: task.work_branch,
-        baseBranch: project.branch,
+        baseBranch: taskBaseBranch(task, project),
         message,
       });
       if (result.ok) {

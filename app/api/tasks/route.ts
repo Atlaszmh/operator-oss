@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createTask, getProject, listAllTasksLite } from "@/lib/store";
+import { createTask, getProject, listAllTasksLite, findFeature } from "@/lib/store";
 import { track } from "@/lib/analytics";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,12 @@ export async function POST(req: Request) {
   if (!body?.project_id || !getProject(body.project_id))
     return NextResponse.json({ error: "valid project_id required" }, { status: 400 });
   if (!body?.title?.trim()) return NextResponse.json({ error: "title required" }, { status: 400 });
+  // Resolved against THIS project, so a stale/foreign id from the client can't
+  // file a task under another project's feature — it degrades to ungrouped.
+  const feature = typeof body.feature_id === "string" && body.feature_id ? findFeature(body.project_id, body.feature_id) : undefined;
   const task = createTask({
     project_id: body.project_id,
+    feature_id: feature?.id ?? null,
     title: body.title.trim(),
     description: body.description ?? "",
     priority: body.priority ?? "med",

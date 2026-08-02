@@ -6,7 +6,7 @@ import { getDb } from "./db";
 // break sync route entries at runtime (see the note in that file).
 import { modelContextWindow } from "./agents/capabilities";
 import { SERVICE_PORT_BASE } from "./config";
-import type { Project, Task, Message, PendingMessage, Summary, Session, Priority, Status, MsgRole, TurnUsage, UsageTotals } from "./types";
+import type { Project, Task, Feature, FeatureWithCounts, Message, PendingMessage, Summary, Session, Priority, Status, MsgRole, TurnUsage, UsageTotals } from "./types";
 
 // ---------- projects ----------
 
@@ -236,6 +236,129 @@ export function listTasks(projectId: string): TaskWithUsage[] {
   return rows.map((r) => ({ ...r, context_pct: contextPct(r.context_tokens, r.agent, r.model), depends_on: byTask.get(r.id) ?? [] }));
 }
 
+// ---------- features (the optional project > feature > task layer) ----------
+
+// A project's features with their progress rollup, in manual order. The counts
+// are derived in one grouped subquery rather than stored on the row: a status
+// column would need writing from every path that touches tasks.status
+// (updateTask, setTaskStatus, the board's reorder, the runner's turn-end
+// settle) and would drift the first time one of them was missed.
+export function listFeatures(projectId: string): FeatureWithCounts[] {
+  return getDb()
+    .prepare(
+      `SELECT f.*,
+         COALESCE(c.total, 0)           AS total,
+         COALESCE(c.done, 0)            AS done,
+         COALESCE(c.suggested_count, 0) AS suggested_count,
+         COALESCE(c.awaiting_count, 0)  AS awaiting_count
+       FROM features f
+       LEFT JOIN (
+         SELECT feature_id,
+           SUM(CASE WHEN suggested = 0 AND status != 'cancelled' THEN 1 ELSE 0 END) AS total,
+           SUM(CASE WHEN suggested = 0 AND status  = 'done'      THEN 1 ELSE 0 END) AS done,
+           SUM(CASE WHEN suggested = 1                           THEN 1 ELSE 0 END) AS suggested_count,
+           SUM(CASE WHEN status = 'in_progress' AND awaiting_input = 1 THEN 1 ELSE 0 END) AS awaiting_count
+         FROM tasks WHERE feature_id IS NOT NULL GROUP BY feature_id
+       ) c ON c.feature_id = f.id
+       WHERE f.project_id = ?
+       ORDER BY f.position ASC, f.created_at ASC`
+    )
+    .all(projectId) as FeatureWithCounts[];
+}
+
+export function getFeature(id: string): Feature | undefined {
+  return getDb().prepare("SELECT * FROM features WHERE id = ?").get(id) as Feature | undefined;
+}
+
+// Resolve a feature reference within one project: an id first, then an exact
+// name (UNIQUE(project_id, name) makes that unambiguous), then a case-insensitive
+// name. The name paths are what let an agent say `feature: "Billing v2"` without
+// ever having seen an id — the same affordance blocked_by gives for task titles.
+export function findFeature(projectId: string, ref: string): Feature | undefined {
+  const key = ref.trim();
+  if (!key) return undefined;
+  const db = getDb();
+  const byId = db.prepare("SELECT * FROM features WHERE id = ? AND project_id = ?").get(key, projectId) as Feature | undefined;
+  if (byId) return byId;
+  return db
+    .prepare("SELECT * FROM features WHERE project_id = ? AND name = ? COLLATE NOCASE")
+    .get(projectId, key) as Feature | undefined;
+}
+
+export function createFeature(input: {
+  project_id: string;
+  name: string;
+  description?: string;
+  context?: string;
+  color?: string;
+}): Feature {
+  const now = Date.now();
+  const id = nanoid();
+  const position = (
+    getDb().prepare("SELECT COALESCE(MAX(position), -1) + 1 AS n FROM features WHERE project_id = ?").get(input.project_id) as { n: number }
+  ).n;
+  getDb()
+    .prepare(
+      `INSERT INTO features (id, project_id, name, description, context, color, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(id, input.project_id, input.name.trim(), input.description ?? "", input.context ?? "", input.color ?? "", position, now, now);
+  return getFeature(id)!;
+}
+
+export function updateFeature(id: string, patch: Partial<Omit<Feature, "id" | "project_id" | "created_at">>): Feature | undefined {
+  const cur = getFeature(id);
+  if (!cur) return undefined;
+  const n = { ...cur, ...patch, updated_at: Date.now() };
+  getDb()
+    .prepare(
+      `UPDATE features SET name=?, description=?, context=?, color=?, branch=?, base_sha=?, merged_at=?, archived=?, position=?, updated_at=? WHERE id=?`
+    )
+    .run(n.name.trim(), n.description, n.context, n.color, n.branch, n.base_sha, n.merged_at, n.archived, n.position, n.updated_at, id);
+  return getFeature(id);
+}
+
+// Hard-deletes the feature row only. Member tasks survive with feature_id NULL —
+// the ON DELETE SET NULL in lib/db.ts is doing that, deliberately (see the
+// comment there): removing a grouping must never destroy the work inside it.
+export function deleteFeature(id: string) {
+  getDb().prepare("DELETE FROM features WHERE id = ?").run(id);
+}
+
+export function reorderFeatures(ids: string[]) {
+  const db = getDb();
+  const stmt = db.prepare("UPDATE features SET position = ? WHERE id = ?");
+  db.transaction(() => {
+    ids.forEach((id, i) => stmt.run(i, id));
+  })();
+}
+
+// The branch a task bases off and merges into: its feature's integration branch
+// when it has one, else the project's. THE single place that resolution happens —
+// every merge/sync/PR/worktree path routes through here, so a caller that
+// forgets features can't exist.
+export function taskBaseBranch(task: Task, project: Project): string {
+  if (!task.feature_id) return project.branch;
+  return getFeature(task.feature_id)?.branch || project.branch;
+}
+
+// Member tasks holding a live worktree. Changing a feature's integration branch
+// while any of these exist would silently invalidate their diff base and merge
+// target, so the API refuses and names them (see app/api/features/[id]/branch).
+export function featureTasksWithWorktrees(featureId: string): { id: string; title: string }[] {
+  return getDb()
+    .prepare("SELECT id, title FROM tasks WHERE feature_id = ? AND worktree_path != ''")
+    .all(featureId) as { id: string; title: string }[];
+}
+
+// Member tasks that would be left behind by shipping — not done, not cancelled.
+// Advisory only: the ship guard names them, it doesn't lock the button forever.
+export function featureUnfinishedTasks(featureId: string): { id: string; title: string }[] {
+  return getDb()
+    .prepare("SELECT id, title FROM tasks WHERE feature_id = ? AND suggested = 0 AND status NOT IN ('done', 'cancelled')")
+    .all(featureId) as { id: string; title: string }[];
+}
+
 // The task ids a given task is blocked by.
 export function getTaskDeps(taskId: string): string[] {
   return (
@@ -298,6 +421,8 @@ export function createTask(input: {
   priority?: Priority;
   suggested?: boolean;
   agent?: string;
+  /** Optional grouping. Callers resolve the reference first (see findFeature). */
+  feature_id?: string | null;
   // Run config. null/absent = inherit (app default, then the driver's own).
   // Callers are responsible for validating these against the agent's capability
   // descriptor — see validateRun() in lib/agentTools.ts.
@@ -315,10 +440,10 @@ export function createTask(input: {
   ).n;
   getDb()
     .prepare(
-      `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, agent, model, reasoning, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO tasks (id, project_id, feature_id, title, description, priority, status, suggested, agent, model, reasoning, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, input.project_id, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, input.model ?? null, input.reasoning ?? null, position, now, now);
+    .run(id, input.project_id, input.feature_id ?? null, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, input.model ?? null, input.reasoning ?? null, position, now, now);
   return getTask(id)!;
 }
 
@@ -340,10 +465,10 @@ export function updateTask(id: string, patch: Partial<Task>): Task | undefined {
   const n = { ...cur, ...patch, updated_at: Date.now() };
   getDb()
     .prepare(
-      `UPDATE tasks SET title=?, description=?, priority=?, status=?, suggested=?, agent=?, model=?, resolved_model=?, reasoning=?, permission_mode=?,
+      `UPDATE tasks SET feature_id=?, title=?, description=?, priority=?, status=?, suggested=?, agent=?, model=?, resolved_model=?, reasoning=?, permission_mode=?,
         session_id=?, worktree_path=?, work_branch=?, base_sha=?, merged_at=?, pr_url=?, generation=?, started=?, running=?, awaiting_input=?, updated_at=? WHERE id=?`
     )
-    .run(n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
+    .run(n.feature_id ?? null, n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
   return getTask(id);
 }
 

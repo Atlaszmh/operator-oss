@@ -68,13 +68,17 @@ async function connectBridge() {
 }
 
 describe("orch-mcp stdio bridge", () => {
-  it("exposes suggest_task, expose_service and ask_user over stdio", async () => {
+  it("exposes every orchestrator tool over stdio", async () => {
     const { client, close } = await connectBridge();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name).sort()).toEqual(["ask_user", "expose_service", "suggest_task"]);
+      // The bridge must offer the SAME set the Claude driver mounts in-process
+      // (lib/agents/claude/driver.ts) — that parity is the whole point of the
+      // shared defs in lib/agentToolDefs.mjs.
+      expect(tools.map((t) => t.name).sort()).toEqual(["ask_user", "expose_service", "suggest_feature", "suggest_task"]);
       // Descriptions come from the shared defs — sanity check they're populated.
       expect(tools.find((t) => t.name === "suggest_task")?.description).toContain("Suggested tray");
+      expect(tools.find((t) => t.name === "suggest_feature")?.description).toContain("FEATURE");
     } finally {
       await close();
     }

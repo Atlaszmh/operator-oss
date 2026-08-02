@@ -6,14 +6,14 @@ import type { ResolveResult } from "../TaskChanges";
 import { jget, jsend } from "./api";
 import { isAwaiting, blockerTitles, formatAnswersText } from "./format";
 import { loadPersist, readUrlSel } from "./persist";
-import { DEFAULT_SETTINGS, EMPTY_AGENTS, type AgentsBundle, type OnboardingT, type ProjectRow, type TaskRow } from "./types";
+import { DEFAULT_SETTINGS, EMPTY_AGENTS, type AgentsBundle, type FeatureRow, type OnboardingT, type ProjectRow, type TaskRow } from "./types";
 import { agentLabel } from "./agents";
 import { useTaskStream } from "./useTaskStream";
 import { useGlobalEvents } from "./useGlobalEvents";
 import { usePrefs } from "./usePrefs";
 import { useRecaps } from "./useRecaps";
 
-type Modal = null | "task" | "context" | "project" | "sessions";
+type Modal = null | "task" | "context" | "project" | "sessions" | "feature";
 
 // The orchestrator's single source of truth: all client state, the derived
 // views over it, the data-loading effects, and every action callback. Returns a
@@ -23,6 +23,12 @@ export function useOrchestrator() {
   const [selProj, setSelProj] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [selTask, setSelTask] = useState<string | null>(null);
+  // The optional project > feature > task layer. Loaded alongside tasks (one
+  // endpoint) so the rollup counts can never disagree with the list they
+  // describe. `selFeature` opens the feature page in the session column and is
+  // mutually exclusive with `selTask` — see selectTask/selectFeature below.
+  const [features, setFeatures] = useState<FeatureRow[]>([]);
+  const [selFeature, setSelFeature] = useState<string | null>(null);
   // First-paint state: booted flips once the initial project fetch lands, so the
   // shell can show a column skeleton instead of a blank flash; a failed boot
   // surfaces as a retryable error screen instead of an empty workspace.
@@ -63,6 +69,11 @@ export function useOrchestrator() {
   const realTasks = useMemo(() => tasks.filter((t) => !t.suggested), [tasks]);
   const suggested = useMemo(() => tasks.filter((t) => t.suggested), [tasks]);
   const task = useMemo(() => tasks.find((t) => t.id === selTask) ?? null, [tasks, selTask]);
+  // Archived features stay out of the working set (grouping, pickers, chips) but
+  // remain resolvable by id, so a task still filed under one renders its name.
+  const activeFeatures = useMemo(() => features.filter((f) => !f.archived), [features]);
+  const featuresById = useMemo(() => new Map(features.map((f) => [f.id, f])), [features]);
+  const feature = useMemo(() => features.find((f) => f.id === selFeature) ?? null, [features, selFeature]);
   // taskId -> titles of its unfinished blockers. A task in this map is blocked:
   // it shows a "Blocked by" chip and its Start button is disabled. Recomputed from
   // the live task list, so a blocker hitting 'done' auto-unblocks dependents.
@@ -106,8 +117,12 @@ export function useOrchestrator() {
   useEffect(() => { agentsRef.current = agents; }, [agents]);
 
   const loadTasks = useCallback(async (projectId: string, selectFirst = true) => {
-    const data = await jget<{ tasks: TaskRow[] }>(`/api/projects/${projectId}`);
+    const data = await jget<{ tasks: TaskRow[]; features: FeatureRow[] }>(`/api/projects/${projectId}`);
     setTasks(data.tasks);
+    // Bundled with the tasks on purpose: every task mutation refetches this
+    // endpoint, so the rollup counts refresh in the same tick as the rows they
+    // count. A separate features fetch would race and show stale progress.
+    setFeatures(data.features ?? []);
     setTasksFor(projectId);
     if (selectFirst) {
       const first = data.tasks.find((t) => !t.suggested);
@@ -260,7 +275,10 @@ export function useOrchestrator() {
         // You're already staring at it — no need to interrupt.
         if (t.id === selTask && document.visibilityState === "visible") continue;
         const n = new Notification(`${agentLabel(agents, t.agent)} needs your input`, { body: t.title, tag: `await-${t.id}` });
-        n.onclick = () => { window.focus(); setSelTask(t.id); n.close(); };
+        // Raw setter: this effect is declared above selectTask, and a jump
+        // straight to a task is correct either way (a task outranks the feature
+        // page in the session column). Kept raw to avoid the TDZ dance.
+        n.onclick = () => { window.focus(); setSelFeature(null); setSelTask(t.id); n.close(); };
       }
     }
     notifiedRef.current = ids;
@@ -367,12 +385,58 @@ export function useOrchestrator() {
   }, [selProj, loadTasks]);
 
   // ---------- actions ----------
-  const selectProject = (id: string) => { setSelProj(id); setSelTask(null); setView("workspace"); };
+  // The session column shows a task OR a feature page OR the project landing,
+  // never two at once. Both selectors are wrapped here rather than at each call
+  // site so every path into them (cards, ⌘K palette, needs-you menu, browser
+  // notifications, board panel) gets the mutual exclusion for free.
+  const selectTask = useCallback((id: string | null) => { setSelFeature(null); setSelTask(id); }, []);
+  const selectFeature = useCallback((id: string | null) => { setSelTask(null); setSelFeature(id); }, []);
+  const selectProject = (id: string) => { setSelProj(id); setSelTask(null); setSelFeature(null); setView("workspace"); };
+
+  // ---------- features ----------
+  // Refetch the selected project's tasks + features without touching selection.
+  // What a git action on a feature needs: shipping moves merged_at, syncing can
+  // move task rows, and both change the rollup counts.
+  const refreshTasks = useCallback(async () => {
+    if (selProjRef.current) await loadTasks(selProjRef.current, false);
+  }, [loadTasks]);
+
+  const createFeature = async (input: { name: string; description: string; context: string }) => {
+    if (!project) return;
+    const f = await jsend<FeatureRow>("/api/features", "POST", { project_id: project.id, ...input });
+    await loadTasks(project.id, false);
+    selectFeature(f.id);
+    setModal(null);
+  };
+
+  const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">>) => {
+    const fresh = await jsend<FeatureRow>(`/api/features/${id}`, "PATCH", patch);
+    setFeatures((prev) => prev.map((f) => (f.id === id ? { ...f, ...fresh } : f)));
+  };
+
+  // Deletes the grouping only — member tasks survive, un-grouped (the server's
+  // ON DELETE SET NULL). Reload so those tasks re-render in the status groups.
+  const removeFeature = async (id: string) => {
+    await jsend(`/api/features/${id}`, "DELETE");
+    if (selFeature === id) setSelFeature(null);
+    if (selProj) await loadTasks(selProj, false);
+  };
+
+  // File a task under a feature (or un-file it with null). Optimistic on the
+  // task row; the reload afterwards is what refreshes the rollup counts.
+  const setTaskFeature = async (taskId: string, featureId: string | null) => {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, feature_id: featureId } : t)));
+    try {
+      await jsend<TaskRow>(`/api/tasks/${taskId}`, "PATCH", { feature_id: featureId });
+    } finally {
+      if (selProjRef.current) await loadTasks(selProjRef.current, false);
+    }
+  };
 
   // Jump to the next task waiting on the user: prefer one in the current project,
   // else switch to the first other project that has one (its group sits at the top).
   const jumpToNeedsYou = () => {
-    if (liveAwaiting.length > 0) { setSelTask(liveAwaiting[0].id); return; }
+    if (liveAwaiting.length > 0) { selectTask(liveAwaiting[0].id); return; }
     const p = activeProjects.find((p) => p.id !== selProj && p.awaiting_count > 0);
     if (p) selectProject(p.id);
   };
@@ -383,7 +447,7 @@ export function useOrchestrator() {
   const goToTask = (projectId: string, taskId: string) => {
     setView("workspace");
     setSelProj(projectId);
-    setSelTask(taskId);
+    selectTask(taskId);
   };
 
   const clearSession = useCallback(async (taskId: string) => {
@@ -428,13 +492,13 @@ export function useOrchestrator() {
     setTasks((prev) => prev.map((x) => (x.id === task.id ? { ...x, ...fresh } : x)));
   };
 
-  const createTask = async (input: { title: string; desc: string; priority: Priority; agent: string; model: string | null; reasoning: string | null; startNow: boolean; depends_on: string[] }) => {
+  const createTask = async (input: { title: string; desc: string; priority: Priority; agent: string; model: string | null; reasoning: string | null; feature_id: string | null; startNow: boolean; depends_on: string[] }) => {
     if (!project) return;
-    const t = await jsend<TaskRow>("/api/tasks", "POST", { project_id: project.id, title: input.title, description: input.desc, priority: input.priority, agent: input.agent, model: input.model, reasoning: input.reasoning });
+    const t = await jsend<TaskRow>("/api/tasks", "POST", { project_id: project.id, title: input.title, description: input.desc, priority: input.priority, agent: input.agent, model: input.model, reasoning: input.reasoning, feature_id: input.feature_id });
     // Dependencies are an edit-after-create step (the task id doesn't exist until now).
     if (input.depends_on.length) await jsend(`/api/tasks/${t.id}`, "PATCH", { depends_on: input.depends_on });
     await loadTasks(project.id, false);
-    setSelTask(t.id);
+    selectTask(t.id);
     setModal(null);
     if (input.startNow) runTurn(t.id, "", true);
   };
@@ -466,10 +530,12 @@ export function useOrchestrator() {
     }
   }, [loadTasks]);
 
-  const saveTask = async (id: string, patch: { title: string; description: string; priority: Priority; model: string | null; reasoning: string | null; depends_on: string[] }) => {
+  const saveTask = async (id: string, patch: { title: string; description: string; priority: Priority; model: string | null; reasoning: string | null; feature_id: string | null; depends_on: string[] }) => {
     const fresh = await jsend<TaskRow>(`/api/tasks/${id}`, "PATCH", patch);
     setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, ...fresh } : x)));
     setEditId(null);
+    // Re-filing changes two features' rollups; only a reload has both.
+    if (selProjRef.current) void loadTasks(selProjRef.current, false);
   };
 
   // Hard-deletes the task (and its worktree/branch server-side), closes the edit
@@ -484,7 +550,7 @@ export function useOrchestrator() {
   const startSuggestion = async (id: string) => {
     await jsend<TaskRow>(`/api/tasks/${id}`, "PATCH", { suggested: 0 });
     if (selProj) await loadTasks(selProj, false);
-    setSelTask(id);
+    selectTask(id);
     runTurn(id, "", true);
   };
   const acceptSuggestion = async (id: string) => {
@@ -561,6 +627,7 @@ export function useOrchestrator() {
     // state + derived
     booted, bootError, retryBoot: boot, tasksLoading, transcriptLoading,
     projects, activeProjects, deprecatedProjects, selProj, setSelProj, project,
+    features, activeFeatures, featuresById, selFeature, feature,
     tasks, realTasks, suggested, selTask, task, messages, running,
     blockedBy, liveAwaiting, needsYouTotal,
     modal, setModal, editId, setEditId, view, setView, taskView, setTaskView,
@@ -571,7 +638,10 @@ export function useOrchestrator() {
     termOpen, setTermOpen, termMounted, setTermMounted, termHeight, setTermHeight,
     servicesOpen, setServicesOpen, servicesMounted, setServicesMounted, servicesHeight, setServicesHeight,
     // actions
-    setSelTask, fetchRecap, runTurn, answerQuestion, stopTurn, cancelQueued, resolveConflictsWithAI,
+    // NOTE: the exported setSelTask is the wrapped selector — it closes the
+    // feature page. The raw setter stays internal on purpose.
+    setSelTask: selectTask, selectFeature, createFeature, saveFeature, removeFeature, setTaskFeature, refreshTasks,
+    fetchRecap, runTurn, answerQuestion, stopTurn, cancelQueued, resolveConflictsWithAI,
     selectProject, jumpToNeedsYou, goToTask, clearSession, setStatus, setPriority, setModel,
     setReasoning, setPermission, createTask, saveTask, removeTask, moveTask, startSuggestion, acceptSuggestion,
     dismissSuggestion, saveContext, createProject, reorderProjects, removeProject, setDeprecated,

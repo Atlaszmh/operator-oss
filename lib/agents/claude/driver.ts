@@ -12,8 +12,8 @@ import type { Project, Task, StreamEvent, AskQuestion } from "../../types";
 import type { AgentDriver } from "../types";
 import { CLAUDE_CAPABILITIES } from "./capabilities";
 import { getSetting, setSetting, recordRateLimit, type RateLimitSnapshot } from "../../store";
-import { createSuggestedTask, registerExposedService, resolveTitleRefs } from "../../agentTools";
-import { SUGGEST_TASK, EXPOSE_SERVICE } from "../../agentToolDefs.mjs";
+import { createSuggestedTask, createSuggestedFeature, registerExposedService, resolveTitleRefs } from "../../agentTools";
+import { SUGGEST_TASK, SUGGEST_FEATURE, EXPOSE_SERVICE } from "../../agentToolDefs.mjs";
 import { waitForAnswer } from "../../asks";
 import { CLAUDE_CLI_PATH as CLAUDE_PATH } from "../../config";
 import { hasApiKey, looksLikeApiKey, setApiKey, clearApiKey } from "../../anthropic-key";
@@ -71,8 +71,9 @@ function orchestratorServer(project: Project, onSuggest: (title: string) => void
           // in createSuggestedTask's validateRun().
           model: z.string().optional().describe(SUGGEST_TASK.params.model),
           reasoning: z.string().optional().describe(SUGGEST_TASK.params.reasoning),
+          feature: z.string().optional().describe(SUGGEST_TASK.params.feature),
         },
-        async (args: { title: string; description: string; priority: "hi" | "med" | "lo"; blocked_by?: string[]; model?: string; reasoning?: string }) => {
+        async (args: { title: string; description: string; priority: "hi" | "med" | "lo"; blocked_by?: string[]; model?: string; reasoning?: string; feature?: string }) => {
           // Resolve refs (id passes through; a title from earlier this session maps
           // to its id) then create + wire deps via the shared logic. Record this
           // task's title→id so later suggestions can reference it by title.
@@ -83,9 +84,25 @@ function orchestratorServer(project: Project, onSuggest: (title: string) => void
             blocked_by: resolveTitleRefs(args.blocked_by, createdByTitle),
             model: args.model,
             reasoning: args.reasoning,
+            feature: args.feature,
           });
           createdByTitle.set(args.title, task.id);
           onSuggest(args.title);
+          return { content: [{ type: "text", text }] };
+        }
+      ),
+      tool(
+        SUGGEST_FEATURE.name,
+        SUGGEST_FEATURE.description,
+        {
+          name: z.string().describe(SUGGEST_FEATURE.params.name),
+          description: z.string().optional().describe(SUGGEST_FEATURE.params.description),
+          context: z.string().optional().describe(SUGGEST_FEATURE.params.context),
+        },
+        async (args: { name: string; description?: string; context?: string }) => {
+          // Upsert by name — see createSuggestedFeature for why re-running a
+          // planning turn must not duplicate or error.
+          const { text } = createSuggestedFeature(project, args);
           return { content: [{ type: "text", text }] };
         }
       ),

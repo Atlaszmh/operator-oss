@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask, deleteTask, listMessages, getTaskUsage, getTaskContext, getTaskDeps, setTaskDeps } from "@/lib/store";
+import { getTask, getProject, updateTask, deleteTask, listMessages, getTaskUsage, getTaskContext, getTaskDeps, setTaskDeps, findFeature } from "@/lib/store";
 import { removeWorktree } from "@/lib/git";
 import { removeTaskUploads } from "@/lib/uploads";
 import { abortTurn } from "@/lib/abort";
@@ -34,6 +34,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
   // A manual status change is the user taking the wheel — clear the "your turn" flag.
   if ("status" in allowed) allowed.awaiting_input = 0;
+  // Re-filing the task under a feature. Resolved against the task's OWN project
+  // so a foreign feature can't be attached; null/"" un-groups it.
+  if ("feature_id" in body) {
+    const raw = (body as { feature_id?: unknown }).feature_id;
+    const cur = getTask(id);
+    allowed.feature_id = cur && typeof raw === "string" && raw ? findFeature(cur.project_id, raw)?.id ?? null : null;
+  }
   // Cancelling means "stop working on this": kill any in-flight turn. The
   // runner's finally block settles running=0 and discards the parked queue.
   // (The worktree is kept — Cancelled ≠ Delete — so the diff stays reviewable

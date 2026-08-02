@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProject, updateProject, deleteProject } from "@/lib/store";
-import { listTasks } from "@/lib/store";
+import { listTasks, listFeatures } from "@/lib/store";
 import { removeWorktree } from "@/lib/git";
 import { removeTaskUploads } from "@/lib/uploads";
 import { abortTurn } from "@/lib/abort";
@@ -12,7 +12,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ ...project, tasks: listTasks(id) });
+  // Features ride along with the tasks: the client refreshes this one endpoint
+  // after every task mutation, so bundling them keeps the rollup counts in step
+  // with the task list they describe without a second fetch to race against.
+  return NextResponse.json({ ...project, tasks: listTasks(id), features: listFeatures(id) });
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {

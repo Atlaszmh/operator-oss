@@ -7,7 +7,7 @@
 // /messages streams (including zero) can watch; disconnects never touch the
 // turn. Stopping is only ever explicit, via lib/abort.ts (/abort route).
 
-import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting } from "@/lib/store";
+import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting, taskBaseBranch } from "@/lib/store";
 import { getDriver } from "@/lib/agents/registry";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
@@ -103,18 +103,22 @@ export async function startResumeTurn(task: Task, project: Project, userText: st
     let syncNote = "";
     if (task.worktree_path && task.work_branch) {
       try {
+        // The task's own base — its feature's integration branch when it has
+        // one. Catching a feature task up to the PROJECT branch would drag in
+        // work the feature deliberately isn't built on yet.
+        const base = taskBaseBranch(task, project);
         const s = await worktreeSyncStatus({
           repoPath: project.repo_path,
           worktreePath: task.worktree_path,
           workBranch: task.work_branch,
-          baseBranch: project.branch,
+          baseBranch: base,
         });
-        if (s.canFastForward && s.behind > 0 && (await fastForwardWorktree(task.worktree_path, project.branch))) {
+        if (s.canFastForward && s.behind > 0 && (await fastForwardWorktree(task.worktree_path, base))) {
           if (s.baseTip) {
             task.base_sha = s.baseTip;
             updateTask(id, { base_sha: s.baseTip });
           }
-          syncNote = `✓ Caught up to ${project.branch} (was ${s.behind} behind).`;
+          syncNote = `✓ Caught up to ${base} (was ${s.behind} behind).`;
         }
       } catch {
         // skip the catch-up

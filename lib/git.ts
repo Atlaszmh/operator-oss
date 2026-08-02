@@ -100,19 +100,34 @@ export async function recentCommits(repoPath: string, n = 10): Promise<string> {
  * isn't possible (not a git repo, or no commits yet) — the caller then falls
  * back to running directly in the project's repo path.
  */
+/**
+ * Cut (or reuse) a task's isolated worktree.
+ *
+ * `baseBranch` is the branch the new worktree forks from — a feature's
+ * integration branch when the task belongs to one, else the project branch.
+ * When it's absent or names a branch that doesn't exist, we fall back to the
+ * repo's HEAD, which is what this did unconditionally before features existed
+ * and is what keeps greenfield/commitless repos working.
+ *
+ * Passing it also fixes a pre-existing inconsistency: base_sha came from HEAD
+ * while the merge target came from the project branch, so a repo sitting on some
+ * other branch produced a task whose diff base and merge target disagreed.
+ */
 export async function ensureWorktree(
   repoPath: string,
-  taskId: string
+  taskId: string,
+  baseBranch?: string
 ): Promise<{ path: string; branch: string; baseSha: string } | null> {
   // Serialize with merges and other worktree creations on the same repo: both
   // touch the shared worktree registry / read HEAD for the base sha, and a merge
   // racing this could hand back a base_sha read off a transient HEAD.
-  return withRepoLock(repoPath, () => ensureWorktreeLocked(repoPath, taskId));
+  return withRepoLock(repoPath, () => ensureWorktreeLocked(repoPath, taskId, baseBranch));
 }
 
 async function ensureWorktreeLocked(
   repoPath: string,
-  taskId: string
+  taskId: string,
+  baseBranch?: string
 ): Promise<{ path: string; branch: string; baseSha: string } | null> {
   // Greenfield (non-git) or commitless repo: initialize it so the task can be
   // isolated. Without this, every orchestrator-created project — which starts
@@ -124,20 +139,68 @@ async function ensureWorktreeLocked(
 
   const wtPath = path.join(WORKTREES_DIR, taskId);
   const branch = branchForTask(taskId);
+  // Fork point: the requested base branch when it actually exists, else HEAD.
+  // The existence check matters — a project configured for a branch that hasn't
+  // been created yet must still get a worktree, not an error.
+  const startPoint = baseBranch && (await branchExists(repoPath, baseBranch)) ? baseBranch : "HEAD";
   // The commit the task branches from — the stable base for diff + merge.
-  const baseSha = await git(repoPath, ["rev-parse", "HEAD"]);
+  const baseSha = await git(repoPath, ["rev-parse", startPoint]);
   fs.mkdirSync(WORKTREES_DIR, { recursive: true });
 
   // Already linked (e.g. retry after a failed first launch) — reuse it.
   if (fs.existsSync(wtPath)) return { path: wtPath, branch, baseSha };
 
   try {
-    await git(repoPath, ["worktree", "add", "-b", branch, wtPath]);
+    await git(repoPath, ["worktree", "add", "-b", branch, wtPath, startPoint]);
   } catch {
     // Branch may already exist from a prior generation; attach to it instead.
     await git(repoPath, ["worktree", "add", wtPath, branch]);
   }
   return { path: wtPath, branch, baseSha };
+}
+
+/**
+ * Create a feature's integration branch at the tip of `fromBranch` (no worktree,
+ * no checkout — just a ref). Attaching to a branch that already exists is
+ * allowed and is a no-op, so pointing a feature at a branch you made yourself
+ * works. Returns the branch's sha, or null if the repo can't support it.
+ */
+export async function createFeatureBranch(
+  repoPath: string,
+  branch: string,
+  fromBranch: string
+): Promise<{ sha: string; created: boolean } | null> {
+  if (!(await isGitRepo(repoPath)) || !(await hasCommit(repoPath))) return null;
+  return withRepoLock(repoPath, async () => {
+    const exists = await branchExists(repoPath, branch);
+    if (!exists) {
+      // Fork from the project branch when it exists, else from HEAD — same
+      // fallback ensureWorktree uses, for the same greenfield reason.
+      const start = (await branchExists(repoPath, fromBranch)) ? fromBranch : "HEAD";
+      await git(repoPath, ["branch", branch, start]);
+    }
+    const sha = await git(repoPath, ["rev-parse", branch]).catch(() => "");
+    return { sha, created: !exists };
+  });
+}
+
+/**
+ * Land a feature's integration branch on the project branch. A feature branch
+ * has no worktree, so there is nothing to commit first — this is `landBranch`
+ * directly, which is the whole reason that function was split out of mergeTask.
+ */
+export async function mergeFeature(input: {
+  repoPath: string;
+  featureBranch: string;
+  baseBranch: string;
+  message: string;
+}): Promise<MergeResult> {
+  return landBranch({
+    repoPath: input.repoPath,
+    workBranch: input.featureBranch,
+    baseBranch: input.baseBranch,
+    message: input.message,
+  });
 }
 
 /**
@@ -707,8 +770,31 @@ export async function mergeTask(input: {
     return { ok: false, targetBranch: baseBranch, committed, error: `commit failed: ${msgOf(e)}` };
   }
 
-  // The branch tip now holds all of the task's work; this becomes the next diff
-  // base so a subsequent round shows only changes made after this merge.
+  return landBranch({ repoPath, workBranch, baseBranch, message, committed });
+}
+
+/**
+ * Merge one branch into another inside `repoPath`. This is everything
+ * `mergeTask` does AFTER committing the worktree, split out so a feature's
+ * integration branch — which has no worktree to commit — can land through the
+ * exact same code rather than a parallel implementation that drifts.
+ *
+ * `committed` is passed through to the result untouched; it describes what the
+ * caller did before getting here (mergeTask commits, mergeFeature has nothing
+ * to commit) and this function never sets it itself.
+ */
+export async function landBranch(input: {
+  repoPath: string;
+  workBranch: string;
+  baseBranch: string;
+  message: string;
+  committed?: boolean;
+}): Promise<MergeResult> {
+  const { repoPath, workBranch, baseBranch, message } = input;
+  const committed = input.committed ?? false;
+
+  // The branch tip now holds all of the work; this becomes the next diff base
+  // so a subsequent round shows only changes made after this merge.
   const mergedSha = (await git(repoPath, ["rev-parse", workBranch]).catch(() => "")) || undefined;
 
   return withRepoLock(repoPath, async () => {
@@ -1001,13 +1087,16 @@ export interface SyncStatus {
  */
 export async function worktreeSyncStatus(input: {
   repoPath: string;
-  worktreePath: string;
+  /** Omit for a branch with no worktree (a feature's integration branch): every
+   *  other field is pure branch arithmetic over repoPath, and only the dirty
+   *  check needs a working tree — it reports false when there isn't one. */
+  worktreePath?: string;
   workBranch: string;
   baseBranch: string;
 }): Promise<SyncStatus> {
   const { repoPath, worktreePath, workBranch, baseBranch } = input;
   const none: SyncStatus = { behind: 0, ahead: 0, isDirty: false, canFastForward: false, clean: true, conflicts: [], baseTip: "" };
-  if (!worktreePath || !workBranch) return none;
+  if (!workBranch) return none;
   const [baseOk, workOk] = await Promise.all([branchExists(repoPath, baseBranch), branchExists(repoPath, workBranch)]);
   if (!baseOk || !workOk) return none;
 
@@ -1016,7 +1105,9 @@ export async function worktreeSyncStatus(input: {
     git(repoPath, ["rev-parse", baseBranch]).catch(() => ""),
     countOf(`${workBranch}..${baseBranch}`),
     countOf(`${baseBranch}..${workBranch}`),
-    git(worktreePath, ["status", "--porcelain"]).catch(() => "").then((s) => s.trim().length > 0),
+    worktreePath
+      ? git(worktreePath, ["status", "--porcelain"]).catch(() => "").then((s) => s.trim().length > 0)
+      : Promise.resolve(false),
   ]);
 
   // Already up to date — nothing to sync; skip the (relatively costly) conflict probe.

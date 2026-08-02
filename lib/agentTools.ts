@@ -10,8 +10,8 @@
 // the TS/SQLite graph.
 
 import { nanoid } from "nanoid";
-import type { Project, Task, ServiceInfo, Priority, AskQuestion, ToolData } from "./types";
-import { createTask, setTaskDeps, addMessage, updateMessage, updateTask } from "./store";
+import type { Project, Task, Feature, ServiceInfo, Priority, AskQuestion, ToolData } from "./types";
+import { createTask, setTaskDeps, addMessage, updateMessage, updateTask, createFeature, findFeature, updateFeature } from "./store";
 import { getCapabilities } from "./agents/capabilities";
 import { exposeService } from "./services";
 import { publish } from "./events";
@@ -39,6 +39,77 @@ export interface SuggestTaskInput {
   /** Raw model / reasoning values from the agent — validated below, never trusted. */
   model?: string;
   reasoning?: string;
+  /** Feature name or id. Resolved within the project; unknown names auto-create. */
+  feature?: string;
+}
+
+/**
+ * Resolve the `feature` a suggested task named, creating it when the name is
+ * new. Auto-create rather than reject because the alternative is a planner that
+ * calls suggest_task twenty times, gets twenty errors, and files nothing.
+ *
+ * A reference that resolves to another project's feature simply doesn't match
+ * here (findFeature is project-scoped), so it lands as a new feature in THIS
+ * project rather than leaking a task across the boundary.
+ *
+ * Like validateRun, the outcome comes back as a note appended to the text the
+ * agent receives — a planner told "that created a new empty feature" can pass
+ * real context on its next call instead of repeating the omission.
+ */
+function resolveFeature(projectId: string, ref: string | undefined): { id: string | null; note: string } {
+  const key = ref?.trim();
+  if (!key) return { id: null, note: "" };
+  const existing = findFeature(projectId, key);
+  if (existing) return { id: existing.id, note: ` Filed under "${existing.name}".` };
+  const created = createFeature({ project_id: projectId, name: key });
+  return {
+    id: created.id,
+    note: ` Filed under a new feature "${created.name}" — it has no feature context yet; call suggest_feature with the same name to add the shared spec.`,
+  };
+}
+
+/**
+ * Create or update a feature (the suggest_feature tool). Upsert by name rather
+ * than create-or-fail: a planning turn that re-runs, or a later turn extending
+ * the same feature, must not error or leave duplicates behind. An update only
+ * overwrites the fields the agent actually supplied — a bare
+ * `suggest_feature({name})` used to reference an existing feature must not wipe
+ * the context a previous call wrote.
+ *
+ * Never touches `branch`. Creating git branches as a side effect of a planning
+ * turn is not something an agent should do; it's a guarded, deliberate act (see
+ * app/api/features/[id]/branch).
+ */
+export function createSuggestedFeature(
+  project: Project,
+  input: { name: string; description?: string; context?: string }
+): { feature: Feature; text: string } {
+  const name = input.name.trim();
+  const existing = findFeature(project.id, name);
+  if (existing) {
+    const patch: Partial<Feature> = {};
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.context !== undefined) patch.context = input.context;
+    const feature = (Object.keys(patch).length ? updateFeature(existing.id, patch) : existing) ?? existing;
+    return {
+      feature,
+      text:
+        `Updated the existing feature "${feature.name}" (id: ${feature.id}). ` +
+        `Pass feature: "${feature.name}" on suggest_task to file work into it.`,
+    };
+  }
+  const feature = createFeature({
+    project_id: project.id,
+    name,
+    description: input.description ?? "",
+    context: input.context ?? "",
+  });
+  return {
+    feature,
+    text:
+      `Created the feature "${feature.name}" (id: ${feature.id}). ` +
+      `Pass feature: "${feature.name}" on each suggest_task that belongs to it — its context is prepended to every one of their sessions.`,
+  };
 }
 
 /**
@@ -83,12 +154,14 @@ export function createSuggestedTask(project: Project, input: SuggestTaskInput): 
   // The task's agent is projects.default_agent (suggest_task never sets one, so
   // createTask falls back to it) — validate against that agent's descriptor.
   const run = validateRun(project.default_agent, input);
+  const feature = resolveFeature(project.id, input.feature);
   const task = createTask({
     project_id: project.id,
     title: input.title,
     description: input.description,
     priority: input.priority ?? "med",
     suggested: true,
+    feature_id: feature.id,
     model: run.model,
     reasoning: run.reasoning,
   });
@@ -103,7 +176,7 @@ export function createSuggestedTask(project: Project, input: SuggestTaskInput): 
   }
   return {
     task,
-    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${depNote}${run.note}`,
+    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${feature.note}${depNote}${run.note}`,
   };
 }
 

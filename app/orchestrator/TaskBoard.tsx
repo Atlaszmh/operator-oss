@@ -4,9 +4,9 @@ import { useState, type ReactNode } from "react";
 import type { Status } from "@/lib/types";
 import { Icon } from "../icons";
 import { isAwaiting, modelLabel, relTime } from "./format";
-import { SEARCH_MIN, type ProjectRow, type TaskRow, type AgentsBundle, type TaskView } from "./types";
+import { SEARCH_MIN, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel, capsFor } from "./agents";
-import { StatusDot, PriPill, SearchBar, AgentBadge } from "./shared";
+import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip } from "./shared";
 
 // The kanban alternative to the grouped task list (layout from the Claude
 // Design "Operator — Board View" study, rendered with the app's own tokens).
@@ -93,8 +93,8 @@ function dayBucket(ts: number): string {
   return "Earlier";
 }
 
-function BoardCard({ task, agents, selected, running, blockedBy, mini, dragging, canDrag, onSelect, onDragStart, onDragOverCard, onDropOnCard, onDragEnd, actions }: {
-  task: TaskRow; agents: AgentsBundle; selected: boolean; running: boolean; blockedBy?: string[];
+function BoardCard({ task, agents, feature, selected, running, blockedBy, mini, dragging, canDrag, onSelect, onDragStart, onDragOverCard, onDropOnCard, onDragEnd, actions }: {
+  task: TaskRow; agents: AgentsBundle; feature?: FeatureRow; selected: boolean; running: boolean; blockedBy?: string[];
   mini?: boolean; dragging: boolean; canDrag: boolean;
   onSelect: () => void; onDragStart: () => void; onDragOverCard: (e: React.DragEvent) => void;
   onDropOnCard: (e: React.DragEvent) => void; onDragEnd: () => void; actions?: ReactNode;
@@ -127,6 +127,9 @@ function BoardCard({ task, agents, selected, running, blockedBy, mini, dragging,
         {!mini && <PriPill p={task.priority} />}
       </div>
       <div className="bc-meta">
+        {/* Board columns are status, not feature — so the chip is the only
+            place the grouping is visible here. */}
+        <FeatureChip name={feature?.name} color={feature?.color || undefined} />
         <AgentBadge label={agentLabel(agents, task.agent)} multi={!mini && agents.agents.length > 1} />
         {/* Its own span, not a prop on AgentBadge — that renders null on
             single-agent installs and would take the model badge with it. */}
@@ -150,8 +153,8 @@ function BoardCard({ task, agents, selected, running, blockedBy, mini, dragging,
   );
 }
 
-export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blockedBy, canDrag, onSelect, onEditTask, onMove, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion }: {
-  tasks: TaskRow[]; suggested: TaskRow[]; agents: AgentsBundle; selTaskId: string | null;
+export function TaskBoard({ tasks, suggested, agents, features = [], selTaskId, running, blockedBy, canDrag, onSelect, onEditTask, onMove, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion }: {
+  tasks: TaskRow[]; suggested: TaskRow[]; agents: AgentsBundle; features?: FeatureRow[]; selTaskId: string | null;
   running: Set<string>; blockedBy: Map<string, string[]>;
   // Dragging is disabled while a search filter is active: hidden cards would be
   // silently dropped from the persisted order.
@@ -160,6 +163,7 @@ export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blocke
   onMove: (id: string, patch: Partial<Pick<TaskRow, "status" | "suggested">>, orderedIds: string[]) => void;
   onStartSuggestion: (id: string) => void; onAcceptSuggestion: (id: string) => void; onDismissSuggestion: (id: string) => void;
 }) {
+  const featureById = new Map(features.map((f) => [f.id, f]));
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<{ col: ColKey; index: number } | null>(null);
   // Terminal columns past MINI_CAP rows collapse under a veil until expanded.
@@ -249,6 +253,7 @@ export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blocke
                     <BoardCard
                       task={t}
                       agents={agents}
+                      feature={t.feature_id ? featureById.get(t.feature_id) : undefined}
                       selected={t.id === selTaskId}
                       running={running.has(t.id)}
                       blockedBy={blockedBy.get(t.id)}
@@ -292,8 +297,8 @@ export function TaskBoard({ tasks, suggested, agents, selTaskId, running, blocke
 // Full-workspace board shell (desktop): owns everything right of the projects
 // sidebar — header with the List/Board toggle, the board, and (via `children`)
 // the slide-over session panel + drawers the composition root mounts on top.
-export function BoardWorkspace({ project, agents, tasks, suggested, selTaskId, running, blockedBy, loading, onSetView, onMoveTask, onSelectTask, onNewTask, onEditContext, onShowSessions, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, children }: {
-  project: ProjectRow; agents: AgentsBundle; tasks: TaskRow[]; suggested: TaskRow[]; selTaskId: string | null;
+export function BoardWorkspace({ project, agents, features = [], tasks, suggested, selTaskId, running, blockedBy, loading, onSetView, onMoveTask, onSelectTask, onNewTask, onEditContext, onShowSessions, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, children }: {
+  project: ProjectRow; agents: AgentsBundle; features?: FeatureRow[]; tasks: TaskRow[]; suggested: TaskRow[]; selTaskId: string | null;
   running: Set<string>; blockedBy: Map<string, string[]>; loading?: boolean;
   onSetView: (v: TaskView) => void;
   onMoveTask: (id: string, patch: Partial<Pick<TaskRow, "status" | "suggested">>, orderedIds: string[]) => void;
@@ -303,8 +308,15 @@ export function BoardWorkspace({ project, agents, tasks, suggested, selTaskId, r
   children?: ReactNode;
 }) {
   const [query, setQuery] = useState("");
+  // Board columns are status, so a feature can't also be a row without turning
+  // the board into a 2-D grid (see the spec's non-goals). A filter gives the
+  // same "just this feature" view for a fraction of the change.
+  const [featureFilter, setFeatureFilter] = useState<string>("");
+  const activeFeatures = features.filter((f) => !f.archived);
   const q = query.trim().toLowerCase();
-  const match = (t: TaskRow) => !q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q);
+  const match = (t: TaskRow) =>
+    (!q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q)) &&
+    (!featureFilter || (featureFilter === "_none" ? !t.feature_id : t.feature_id === featureFilter));
   const shown = tasks.filter(match);
   const shownSuggested = suggested.filter(match);
   const total = tasks.length;
@@ -317,6 +329,13 @@ export function BoardWorkspace({ project, agents, tasks, suggested, selTaskId, r
         <span className="spacer" />
         {total + suggested.length >= SEARCH_MIN && (
           <div className="bws-search"><SearchBar value={query} onChange={setQuery} placeholder="Search tasks…" /></div>
+        )}
+        {activeFeatures.length > 0 && (
+          <select className="bws-feat" value={featureFilter} onChange={(e) => setFeatureFilter(e.target.value)} title="Show only one feature">
+            <option value="">All features</option>
+            {activeFeatures.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            <option value="_none">No feature</option>
+          </select>
         )}
         <button className="btn btn-line btn-sm" onClick={onShowSessions} title="Agent sessions run under this project">{Icon.clock()} Sessions</button>
         <button className="btn btn-line btn-sm" onClick={onEditContext} title="Edit project context">{Icon.edit()} Context</button>
@@ -339,8 +358,8 @@ export function BoardWorkspace({ project, agents, tasks, suggested, selTaskId, r
         </div>
       ) : (
         <TaskBoard
-          tasks={shown} suggested={shownSuggested} agents={agents} selTaskId={selTaskId}
-          running={running} blockedBy={blockedBy} canDrag={!q}
+          tasks={shown} suggested={shownSuggested} agents={agents} features={features} selTaskId={selTaskId}
+          running={running} blockedBy={blockedBy} canDrag={!q && !featureFilter}
           onSelect={onSelectTask} onEditTask={onEditTask} onMove={onMoveTask}
           onStartSuggestion={onStartSuggestion} onAcceptSuggestion={onAcceptSuggestion} onDismissSuggestion={onDismissSuggestion}
         />

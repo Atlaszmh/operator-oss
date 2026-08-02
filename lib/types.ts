@@ -32,9 +32,39 @@ export interface Project {
   created_at: number;
 }
 
+// The optional layer between a project and its tasks (project > feature > task).
+// A feature groups related tasks, carries context shared by all of them, and may
+// own an integration branch they base off and merge into.
+export interface Feature {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string; // one-line label shown under the group header
+  context: string; // prepended to member tasks' prompts, after project context
+  color: string; // accent for the group header ("" = inherit the project's)
+  branch: string; // integration branch ("" = members use projects.branch as today)
+  base_sha: string; // commit the integration branch forked from
+  merged_at: number; // when the integration branch landed on projects.branch (0 = not yet)
+  archived: number; // 1 = hidden from the working set, restorable (mirrors projects.deprecated)
+  position: number; // manual order within the project (ascending)
+  created_at: number;
+  updated_at: number;
+}
+
+// A feature plus the progress rollup derived from its member tasks. Suggested
+// members are excluded from `total` — they're proposals, not committed work, so
+// a freshly planned feature reads "0/0 · +12 suggested" rather than "0/12".
+export interface FeatureWithCounts extends Feature {
+  total: number; // members that are neither suggested nor cancelled
+  done: number; // members with status 'done'
+  suggested_count: number; // members still in the suggested tray
+  awaiting_count: number; // members waiting on the user right now
+}
+
 export interface Task {
   id: string;
   project_id: string;
+  feature_id: string | null; // optional grouping (see Feature); null = ungrouped
   title: string;
   description: string;
   priority: Priority;

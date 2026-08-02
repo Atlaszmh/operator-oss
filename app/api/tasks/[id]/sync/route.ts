@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTask, getProject, updateTask } from "@/lib/store";
+import { getTask, getProject, updateTask, taskBaseBranch } from "@/lib/store";
 import { worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge } from "@/lib/git";
 import { buildConflictPrompt } from "@/lib/agents/shared";
 import { hasTurn } from "@/lib/abort";
@@ -23,9 +23,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     repoPath: project.repo_path,
     worktreePath: task.worktree_path,
     workBranch: task.work_branch,
-    baseBranch: project.branch,
+    baseBranch: taskBaseBranch(task, project),
   });
-  return NextResponse.json({ isolated: true, baseBranch: project.branch, ...status });
+  return NextResponse.json({ isolated: true, baseBranch: taskBaseBranch(task, project), ...status });
 }
 
 // POST: actually bring the worktree up to date with the base branch. Triggered by
@@ -50,7 +50,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       repoPath: project.repo_path,
       worktreePath: task.worktree_path,
       workBranch: task.work_branch,
-      baseBranch: project.branch,
+      baseBranch: taskBaseBranch(task, project),
     });
     if (status.behind === 0) return NextResponse.json({ ok: true, upToDate: true, behind: 0 });
 
@@ -74,7 +74,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const prep = await prepareWorktreeMerge({
       repoPath: project.repo_path,
       worktreePath: task.worktree_path,
-      baseBranch: project.branch,
+      baseBranch: taskBaseBranch(task, project),
       message,
     });
     if (!prep.ok) return NextResponse.json({ ok: false, error: prep.error }, { status: 409 });
