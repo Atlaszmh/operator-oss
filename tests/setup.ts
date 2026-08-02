@@ -37,7 +37,11 @@ fs.writeFileSync(
     "[commit]",
     "\tgpgsign = false",
     "[core]",
-    `\thooksPath = ${path.join(root, "no-hooks")}`,
+    // Forward slashes, always. git treats a backslash in a config VALUE as an
+    // escape introducer, so a native Windows path here ("C:\Users\...") is a
+    // parse error ("bad config line") that fails every git call in the suite.
+    // git accepts forward slashes on Windows, so this is portable as-is.
+    `\thooksPath = ${path.join(root, "no-hooks").replace(/\\/g, "/")}`,
     "",
   ].join("\n")
 );
