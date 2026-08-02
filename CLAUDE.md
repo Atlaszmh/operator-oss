@@ -35,6 +35,8 @@ Only the SELECTED task has a transcript stream open. Everything else stays live 
 
 **A task is a lineage of sessions**: `/clear` ends generation N, condenses its transcript to a summary, and generation N+1 starts fresh seeded with all prior summaries.
 
+**The outcome line** (`tasks.outcome`): every turn's project context ends with `OUTCOME_INSTRUCTION` asking for one business-facing sentence on a marked line when the agent finishes work; the runner lifts it out of each assistant message with `extractOutcome()` (both in `lib/agents/shared.ts`, together so the marker can't drift from its parser) and writes it in the same settle that clears `running`. Latest report wins; a turn that reports nothing leaves the previous line standing. A marked line rather than an MCP tool ON PURPOSE — text needs no per-driver tool definition or bridge route, so it works identically on Claude, Codex and whatever lands next. Rendered on the task card and under each member on the feature page (a feature's business summary is just its members' lines stacked, so there's nothing extra to generate or keep in sync).
+
 ### The feature layer
 
 `features` is the optional level between a project and its tasks (`tasks.feature_id`, nullable). **Everything about it is opt-in — `feature_id NULL` is the pre-feature behaviour, byte for byte**, including how the tasks column groups (feature groups render *above* the existing status groups, which then hold only the ungrouped tasks).

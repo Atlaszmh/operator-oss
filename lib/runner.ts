@@ -9,6 +9,7 @@
 
 import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting, taskBaseBranch } from "@/lib/store";
 import { getDriver } from "@/lib/agents/registry";
+import { extractOutcome } from "@/lib/agents/shared";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
 import { publish } from "@/lib/events";
@@ -206,6 +207,10 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
   // straight into the same limit. Classified after authFailure (a dead login
   // never doubles as a spent quota).
   let usageLimitFailure: string | null = null;
+  // The business-facing outcome line this turn reported, if it reported one (see
+  // extractOutcome). Collected as messages stream but written once, in the settle
+  // below, so a turn that reports and then keeps working costs no extra writes.
+  let outcome = "";
   const startedAt = Date.now();
 
   // Persist + publish a failed turn's transcript line (with a recovery hint when
@@ -263,6 +268,10 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
         publish(id, ev);
       } else if (ev.type === "assistant") {
         const m = addMessage(id, gen, "assistant", ev.content);
+        // Latest report wins — a turn that finishes twice (fix, then follow-up
+        // fix) should leave the card describing where it actually ended up.
+        const reported = extractOutcome(ev.content);
+        if (reported) outcome = reported;
         publish(id, { ...ev, msgId: m.id, generation: gen });
       } else if (ev.type === "tool") {
         const data = toolData(ev);
@@ -380,7 +389,9 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
     // own or was Stopped — is now waiting on the user, so flag awaiting_input
     // (cleared on the next send / done) leaving it cleanly resumable.
     if (!generationAdvanced && !superseded) {
-      updateTask(id, { running: 0, session_id: sessionId, awaiting_input: opened ? 1 : 0 });
+      // Only written when this turn reported one: a turn that says nothing must
+      // not blank the outcome an earlier turn already earned.
+      updateTask(id, { running: 0, session_id: sessionId, awaiting_input: opened ? 1 : 0, ...(outcome ? { outcome } : {}) });
     }
     // Keyed by (task_id, generation), so this settles THIS generation's session
     // row and never touches the fresh generation — safe to run either way.

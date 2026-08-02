@@ -125,13 +125,19 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
               <div className="feat-empty">No tasks yet. Create one, or ask an agent to break this feature down.</div>
             ) : (
               <div className="feat-tasks">
+                {/* Each member's outcome line under its title IS the feature's
+                    business summary — a rollup of stored sentences, so there's
+                    no second thing to generate and nothing to keep in sync. */}
                 {tasks.map((t) => (
                   <button key={t.id} className="feat-task" onClick={() => onSelectTask(t.id)}>
-                    <StatusDot status={t.status} awaiting={isAwaiting(t)} />
-                    <span className="ft-title">{t.title}</span>
-                    {t.suggested === 1 && <span className="ft-sug">suggested</span>}
-                    <span className="ft-status">{isAwaiting(t) ? "Needs you" : SLABEL[t.status]}</span>
-                    <span className="ft-time">{relTime(t.updated_at)}</span>
+                    <div className="ft-row">
+                      <StatusDot status={t.status} awaiting={isAwaiting(t)} />
+                      <span className="ft-title">{t.title}</span>
+                      {t.suggested === 1 && <span className="ft-sug">suggested</span>}
+                      <span className="ft-status">{isAwaiting(t) ? "Needs you" : SLABEL[t.status]}</span>
+                      <span className="ft-time">{relTime(t.updated_at)}</span>
+                    </div>
+                    {t.outcome && <div className="ft-outcome">{t.outcome}</div>}
                   </button>
                 ))}
               </div>

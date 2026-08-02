@@ -96,6 +96,7 @@ export async function GET(req: Request) {
           awaiting_input: !!t.awaiting_input,
           status: t.status,
           awaiting_count: countAwaiting(t.project_id),
+          outcome: t.outcome,
         };
         send(payload);
       });

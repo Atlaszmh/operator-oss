@@ -110,6 +110,10 @@ export function init(db: Database.Database) {
       base_sha      TEXT NOT NULL DEFAULT '',
       merged_at     INTEGER NOT NULL DEFAULT 0,
       pr_url        TEXT NOT NULL DEFAULT '',
+      -- One plain-language sentence on what this task DELIVERED, self-reported
+      -- by the agent (see extractOutcome in lib/agents/shared.ts). '' = never
+      -- reported. Latest report wins; it's a headline, not a history.
+      outcome       TEXT NOT NULL DEFAULT '',
       generation  INTEGER NOT NULL DEFAULT 1,
       started     INTEGER NOT NULL DEFAULT 0,
       running     INTEGER NOT NULL DEFAULT 0,
@@ -377,6 +381,8 @@ export function migrate(db: Database.Database) {
   if (!taskCols.includes("agent")) db.exec("ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'");
   // GitHub PR opened from this task's branch via "Create PR" ("" = none yet).
   if (!taskCols.includes("pr_url")) db.exec("ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
+  // The agent's business-facing outcome line ("" = not reported yet).
+  if (!taskCols.includes("outcome")) db.exec("ALTER TABLE tasks ADD COLUMN outcome TEXT NOT NULL DEFAULT ''");
   // The optional feature this task belongs to (NULL = ungrouped, which is what
   // every pre-feature task is). SQLite requires a NULL default when adding a
   // column with a REFERENCES clause, which is exactly what we want anyway.

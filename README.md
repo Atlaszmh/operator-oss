@@ -32,6 +32,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 - **Pick your agent per task** — Claude Code or Codex, both on subscription logins.
 - **Model delegation** — when an agent plans work, it picks the model and thinking budget for each task it proposes, so a rename doesn't run on your most expensive model and a refactor doesn't fail on your cheapest. Its choice shows on the task card and is editable before the task starts.
 - **Optional feature layer** — group related tasks under a feature (project › feature › task). It carries context every task in it inherits, shows progress at a glance, and can own an integration branch its tasks base off and merge into, so the whole thing lands on `main` as one unit. Agents plan into it with `suggest_feature`. Entirely optional: a task with no feature behaves exactly as before.
+- **Outcome in plain language** — every session is asked to end its finished work with one business-facing sentence on what you actually got ("Customers can pay with Apple Pay", not "refactored `checkout.ts`"). It lands on the task card and stacks up on the feature page, so you can read what shipped without opening a single transcript.
 - **Write-once project context** — auto-injected into every task; **Refresh with AI** redrafts it from the repo.
 - **Session lineage** — `/clear` hands a summary to a fresh context window; the task lives on.
 - **Reconnect-safe turns** — turns run server-side; reload or sleep the laptop and the transcript catches up. Queue follow-ups mid-turn.

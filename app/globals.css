@@ -363,6 +363,14 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .task-top{display:flex;align-items:center;gap:9px;}
 .task .ttitle{flex:1;min-width:0;font-weight:650;font-size:13.5px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .task .tdesc{font-size:12px;color:var(--ink-2);margin-top:5px;line-height:1.42;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+/* The agent's business-facing outcome line. Green like every other "landed"
+   signal in the app, clamped to two lines with the full text on hover. */
+.task .toutcome{
+  display:flex;align-items:flex-start;gap:5px;margin-top:7px;font-size:11.5px;line-height:1.42;
+  color:var(--green);
+}
+.task .toutcome svg{flex:0 0 auto;margin-top:2px;}
+.task .toutcome span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .task-foot{display:flex;align-items:center;gap:8px;margin-top:9px;}
 .task-foot .activity{font-family:var(--mono);font-size:10px;color:var(--ink-3);display:flex;align-items:center;gap:5px;}
 .task-foot .spacer{flex:1;}
@@ -1609,9 +1617,13 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 
 .feat-tasks{display:flex;flex-direction:column;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;}
 .feat-task{
-  display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--line);
+  display:flex;flex-direction:column;gap:5px;padding:9px 12px;border-bottom:1px solid var(--line);
   background:var(--surface);text-align:left;width:100%;cursor:pointer;transition:background .12s;
 }
+.feat-task .ft-row{display:flex;align-items:center;gap:9px;width:100%;}
+/* The member's delivered outcome. Indented under the title so the column of
+   them reads as the feature's business summary, top to bottom. */
+.feat-task .ft-outcome{padding-left:19px;font-size:11.5px;line-height:1.45;color:var(--green);}
 .feat-task:last-child{border-bottom:0;}
 .feat-task:hover{background:var(--surface-2);}
 .feat-task .ft-title{flex:1;min-width:0;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

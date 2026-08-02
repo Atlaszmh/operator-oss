@@ -44,6 +44,11 @@ function TaskCard({ task, agents, selected, running, blockedBy, onSelect, featur
         </div>
       )}
       {task.description && <div className="tdesc">{task.description}</div>}
+      {/* What the task DELIVERED, in the agent's own words — the whole point is
+          reading it off the card instead of opening the transcript. Rendered
+          whenever it exists, not only on done tasks: a long task that already
+          reported one is exactly where the glance pays off. */}
+      {task.outcome && <div className="toutcome" title={task.outcome}>{Icon.check()}<span>{task.outcome}</span></div>}
       <div className="task-foot">
         <span className="activity">{awaiting ? <span style={{ color: "var(--blue)" }}>●</span> : running ? <span style={{ color: "var(--amber)" }}>●</span> : null}{activity}</span>
         <span className="spacer" />

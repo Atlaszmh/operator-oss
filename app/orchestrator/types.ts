@@ -59,6 +59,7 @@ export interface TaskRow {
   permission_mode: string | null; // run permission; null = bypassPermissions (default)
   session_id: string | null;
   pr_url: string; // GitHub PR opened from this task's branch ("" = none yet)
+  outcome: string; // one plain-language sentence on what the task delivered ("" = not reported)
   generation: number;
   started: number;
   running: number;

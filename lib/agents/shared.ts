@@ -168,7 +168,54 @@ export function buildProjectContext(project: Project, task: Task): string {
       `CRA/webpack-dev-server is pre-cleared via env. ORCH_PUBLIC_HOST is injected into services ` +
       `the orchestrator starts.`
   );
+  lines.push(OUTCOME_INSTRUCTION);
   return lines.join("\n");
+}
+
+// ---------- the business-facing outcome line ----------
+//
+// A task's transcript answers "what did the agent do"; nobody scrolls one to
+// answer "what did we get". So every turn asks for one plain-language sentence
+// on a marked line, and extractOutcome lifts it off the assistant text into
+// tasks.outcome, which the task card and the feature page render.
+//
+// A marked line rather than an MCP tool ON PURPOSE: a tool would need a
+// definition per driver plus a bridge route, and would only ever fire for
+// agents that got it. Text works identically for Claude, Codex, and whatever
+// driver lands next — the instruction rides the same project context they all
+// already receive.
+
+export const OUTCOME_INSTRUCTION =
+  `\n---\nWhenever you finish the task — or a self-contained chunk of it — end that message with ` +
+  `a single line, on its own, in exactly this form:\n` +
+  `OUTCOME: <one sentence>\n` +
+  `Write it for someone who will never read the code or this transcript: what the business or the ` +
+  `user can now DO that they couldn't before, or what problem stopped happening. No file names, no ` +
+  `function names, no framework names, no "refactored"/"implemented"/"added a handler". ` +
+  `Bad: "Refactored checkout.ts to use the new PaymentIntent API." ` +
+  `Good: "Customers can now pay with Apple Pay, so mobile checkout stops losing card-less buyers." ` +
+  `Restate it each time you finish more work — the latest line replaces the previous one.`;
+
+// Tolerant of the markdown agents reach for unprompted (**Outcome:**, ## Outcome,
+// "> OUTCOME:"). The `m` flag anchors per line so the marker is never matched
+// mid-sentence, and the LAST match in the message wins — a message that walks
+// through the work before reporting ends on the real line.
+const OUTCOME_RE = /^[ \t>#*_-]*outcome[ \t*_]*:[ \t]*(\S.*?)[ \t]*$/gim;
+
+// Long enough for a real sentence, short enough that a runaway paragraph can't
+// bloat the task row or the card that renders it.
+const OUTCOME_MAX = 300;
+
+/**
+ * Pull the business-facing outcome line out of one assistant message.
+ * Returns "" when the message doesn't report one (most messages don't).
+ */
+export function extractOutcome(text: string): string {
+  let found = "";
+  for (const m of text.matchAll(OUTCOME_RE)) found = m[1];
+  // Strip the markdown the sentence itself may be wrapped in (**…**, `…`).
+  found = found.replace(/^[*_`]+|[*_`]+$/g, "").trim();
+  return found.length > OUTCOME_MAX ? found.slice(0, OUTCOME_MAX - 1).trimEnd() + "…" : found;
 }
 
 /**

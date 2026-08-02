@@ -81,6 +81,11 @@ export interface Task {
   base_sha: string; // commit the worktree branched from — the stable diff/merge base
   merged_at: number; // when this task's branch was merged back (0 = not merged)
   pr_url: string; // GitHub PR opened from this task's branch via "Create PR" ("" = none)
+  // What this task DELIVERED, in one plain-language sentence, self-reported by
+  // the agent whenever it believes the work is finished ("" = never reported).
+  // Deliberately business-facing: no file names, no implementation detail — it's
+  // the line you read off the task card instead of opening the transcript.
+  outcome: string;
   generation: number; // increments on each /clear
   position: number; // manual order within the project (list groups + board columns, ascending)
   started: number; // 1 once the initial prompt has been sent
@@ -289,6 +294,9 @@ export type GlobalTaskEvent = {
   status: Status;
   /** In-progress tasks awaiting the user across this task's project. */
   awaiting_count: number;
+  /** The task's business-facing outcome line ("" = none reported yet). Rides
+   *  along so a turn that reports one updates the card without a refetch. */
+  outcome: string;
 };
 
 // Everything GET /api/events can send. Task lifecycle is the bulk of it;
