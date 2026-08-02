@@ -109,6 +109,21 @@ describe("orch-mcp stdio bridge", () => {
     }
   });
 
+  it("forwards model and reasoning to the internal endpoint", async () => {
+    calls.length = 0;
+    const { client, close } = await connectBridge();
+    try {
+      await client.callTool({
+        name: "suggest_task",
+        arguments: { title: "Cheap", description: "rename a thing", model: "haiku", reasoning: "off" },
+      });
+      const call = calls.find((c) => c.body.title === "Cheap")!;
+      expect(call.body).toMatchObject({ model: "haiku", reasoning: "off" });
+    } finally {
+      await close();
+    }
+  });
+
   it("proxies expose_service and returns the URL text", async () => {
     calls.length = 0;
     const { client, close } = await connectBridge();

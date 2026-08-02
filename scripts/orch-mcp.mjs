@@ -83,13 +83,18 @@ server.registerTool(
       description: z.string().describe(SUGGEST_TASK.params.description),
       priority: z.enum(SUGGEST_TASK.priorities).default(SUGGEST_TASK.defaultPriority),
       blocked_by: z.array(z.string()).optional().describe(SUGGEST_TASK.params.blocked_by),
+      // z.string(), not z.enum — this file can't import the TS capability
+      // descriptors, and a one-sided enum is exactly the drift agentToolDefs.mjs
+      // exists to prevent. The app validates in createSuggestedTask.
+      model: z.string().optional().describe(SUGGEST_TASK.params.model),
+      reasoning: z.string().optional().describe(SUGGEST_TASK.params.reasoning),
     },
   },
-  async ({ title, description, priority, blocked_by }) => {
+  async ({ title, description, priority, blocked_by, model, reasoning }) => {
     // Resolve refs (id passes through; a title from earlier this turn → its id)
     // before handing off — the endpoint just forwards ids to setTaskDeps.
     const deps = (blocked_by ?? []).map((ref) => createdByTitle.get(ref) ?? ref);
-    const data = await callInternal("suggest-task", { title, description, priority, blocked_by: deps });
+    const data = await callInternal("suggest-task", { title, description, priority, blocked_by: deps, model, reasoning });
     if (data.id) createdByTitle.set(title, data.id);
     return { content: [{ type: "text", text: data.text }] };
   }

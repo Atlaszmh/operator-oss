@@ -17,6 +17,8 @@ export async function POST(req: NextRequest) {
     description?: string;
     priority?: Priority;
     blocked_by?: string[];
+    model?: string;
+    reasoning?: string;
   };
   try {
     body = await req.json();
@@ -33,6 +35,10 @@ export async function POST(req: NextRequest) {
     description: body.description ?? "",
     priority: body.priority,
     blocked_by: Array.isArray(body.blocked_by) ? body.blocked_by : undefined,
+    // Unvalidated on purpose — createSuggestedTask owns that, so both call paths
+    // get identical treatment from one place.
+    model: typeof body.model === "string" ? body.model : undefined,
+    reasoning: typeof body.reasoning === "string" ? body.reasoning : undefined,
   });
   return NextResponse.json({ ok: true, id: task.id, title: task.title, text });
 }

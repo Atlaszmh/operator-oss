@@ -111,6 +111,19 @@ describe("internal agent-tool endpoints", () => {
     expect(getTaskDeps(json.id)).toEqual([blocker.id]);
   });
 
+  it("suggest-task applies model and reasoning from the body", async () => {
+    const project = createProject({ name: "EP-Run" });
+    const res = await post(suggestTask, "/api/internal/agent-tools/suggest-task", {
+      projectId: project.id,
+      title: "Routed",
+      description: "",
+      model: "sonnet",
+      reasoning: "think",
+    });
+    const json = (await res.json()) as { id: string };
+    expect(getTask(json.id)).toMatchObject({ model: "sonnet", reasoning: "think" });
+  });
+
   it("suggest-task rejects an unknown project (404) and a missing title (400)", async () => {
     const bad = await post(suggestTask, "/api/internal/agent-tools/suggest-task", { projectId: "nope", title: "x" });
     expect(bad.status).toBe(404);

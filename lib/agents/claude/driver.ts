@@ -65,8 +65,14 @@ function orchestratorServer(project: Project, onSuggest: (title: string) => void
           description: z.string().describe(SUGGEST_TASK.params.description),
           priority: z.enum(["hi", "med", "lo"]).default("med"),
           blocked_by: z.array(z.string()).optional().describe(SUGGEST_TASK.params.blocked_by),
+          // z.string(), not z.enum: the stdio bridge is plain Node and can't
+          // import the TS capability descriptors, so an enum would exist on one
+          // side only and the two schemas would drift. Values are enforced once,
+          // in createSuggestedTask's validateRun().
+          model: z.string().optional().describe(SUGGEST_TASK.params.model),
+          reasoning: z.string().optional().describe(SUGGEST_TASK.params.reasoning),
         },
-        async (args: { title: string; description: string; priority: "hi" | "med" | "lo"; blocked_by?: string[] }) => {
+        async (args: { title: string; description: string; priority: "hi" | "med" | "lo"; blocked_by?: string[]; model?: string; reasoning?: string }) => {
           // Resolve refs (id passes through; a title from earlier this session maps
           // to its id) then create + wire deps via the shared logic. Record this
           // task's title→id so later suggestions can reference it by title.
@@ -75,6 +81,8 @@ function orchestratorServer(project: Project, onSuggest: (title: string) => void
             description: args.description,
             priority: args.priority,
             blocked_by: resolveTitleRefs(args.blocked_by, createdByTitle),
+            model: args.model,
+            reasoning: args.reasoning,
           });
           createdByTitle.set(args.title, task.id);
           onSuggest(args.title);
