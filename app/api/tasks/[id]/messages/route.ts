@@ -1,11 +1,10 @@
 import fs from "node:fs";
-import { getTask, getProject, updateTask, addMessage, listMessages, listPendingMessages, addPendingMessage, taskBaseBranch } from "@/lib/store";
-import { startTurn, startResumeTurn } from "@/lib/runner";
+import { getTask, getProject, updateTask, listMessages, listPendingMessages, addPendingMessage } from "@/lib/store";
+import { startInitialTurn, startResumeTurn } from "@/lib/runner";
 import { claimTurn, hasTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
 import { subscribe, publish } from "@/lib/events";
 import { sseOpened, sseClosed } from "@/lib/idle";
-import { ensureWorktree } from "@/lib/git";
 import { MAX_MESSAGE_CHARS } from "@/lib/promptLimits";
 import type { TaskStreamEvent } from "@/lib/types";
 
@@ -67,6 +66,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       );
     }
 
+    // Re-read after the claim: a previous turn may have finished (setting
+    // `started`) between the read at the top and the claim we now hold. With the
+    // slot claimed nothing can change it under us, so this decides initial vs
+    // resume safely.
+    const claimed = getTask(id);
+    if (!claimed) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+
+    if (!claimed.started) {
+      // The very first turn: worktree creation + title/description as the prompt.
+      // Shared with lib/autopilot.ts, which starts the tasks of an approved plan.
+      // It takes the per-task lock itself, so this must not already hold it.
+      const res = await startInitialTurn(claimed, project, controller);
+      if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: res.status });
+      launched = true;
+      return new Response(JSON.stringify({ ok: true, generation: res.generation }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const userText = String(text ?? "").trim();
+    if (!userText) return new Response(JSON.stringify({ error: "empty message" }), { status: 400 });
+    if (userText.length > MAX_MESSAGE_CHARS) return new Response(JSON.stringify({ error: TOO_LARGE }), { status: 413 });
+
     // The launch runs under the per-task lock shared with the merge/sync/complete
     // routes: those rewrite the worktree with multi-second git operations, and a
     // turn starting mid-commit would hand the agent a worktree being staged (and
@@ -77,65 +100,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return await withTaskLock(id, async () => {
       // Re-read under the lock — the task may have moved while we waited (a
       // merge advancing base_sha, a /clear bumping the generation, a delete).
-      // No hasTurn re-check is needed here: the claim above owns the slot
-      // atomically, so no other turn can have launched in the meantime.
       const fresh = getTask(id);
       if (!fresh) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
 
-      const isInitial = !fresh.started;
-      // The very first turn's prompt is the title + description.
-      const userText = isInitial
-        ? `${fresh.title}\n\n${fresh.description}`.trim()
-        : String(text ?? "").trim();
-      if (!userText) return new Response(JSON.stringify({ error: "empty message" }), { status: 400 });
-      if (userText.length > MAX_MESSAGE_CHARS) return new Response(JSON.stringify({ error: TOO_LARGE }), { status: 413 });
+      // A human message is also how a task autopilot escalated gets un-stuck:
+      // answering it clears the block and returns its retry budget, so there's
+      // no separate "resume" affordance to find, or to forget about.
+      if (fresh.blocked_reason || fresh.gate_attempts)
+        updateTask(id, { blocked_reason: "", gate_attempts: 0 });
 
-      // Give the task its own git worktree + branch so parallel tasks in the same
-      // repo never collide. This runs on the first turn, but also self-heals a task
-      // whose worktree is missing on disk — e.g. one that was reopened after its
-      // merged worktree was pruned to reclaim disk. ensureWorktree reattaches to the
-      // surviving branch when it still exists, so the old work is restored. Non-git/
-      // empty repos fall back to running directly in repo_path (worktree_path stays
-      // ""). Best-effort: a git hiccup must not block the run. Mutating `fresh` so the
-      // runner uses the new cwd. Safe to await while holding the claim: that's the
-      // point — a second POST landing in this window queues instead of double-running.
-      if (!fresh.worktree_path || !fs.existsSync(fresh.worktree_path)) {
-        try {
-          // Fork from the task's OWN base — its feature's integration branch
-          // when it belongs to one, else the project branch. This is the only
-          // place a worktree is cut, so it's the only place that needs to know.
-          // (taskBaseBranch returns project.branch for a task with no feature,
-          // so this is a superset of the plain project.branch it replaces.)
-          const wt = await ensureWorktree(project.repo_path, fresh.id, taskBaseBranch(fresh, project));
-          if (wt) {
-            fresh.worktree_path = wt.path;
-            fresh.work_branch = wt.branch;
-            fresh.base_sha = wt.baseSha;
-            updateTask(id, { worktree_path: wt.path, work_branch: wt.branch, base_sha: wt.baseSha });
-          }
-        } catch {
-          // fall back to repo_path
-        }
-      }
-
-      const gen = fresh.generation;
-      if (isInitial) {
-        const userMsg = addMessage(id, gen, "user", `**${fresh.title}** — ${fresh.description}`);
-        // Mark running immediately, but defer `started` until Claude actually opens
-        // a session — so a failed launch leaves the task cleanly retryable.
-        updateTask(id, { running: 1, suggested: 0, awaiting_input: 0 });
-        // Echo the user message to every open stream of this task (other viewers,
-        // and the sender itself — the client renders from events, not optimistically).
-        publish(id, { type: "user", content: userMsg.content, msgId: userMsg.id, generation: gen });
-        startTurn(fresh, project, userText, "", controller);
-      } else {
-        // Resume: catch the worktree up, persist + echo the message, then hand off
-        // to the detached runner. Same path the queue drainer uses.
-        await startResumeTurn(fresh, project, userText, controller);
-      }
+      // Resume: catch the worktree up, persist + echo the message, then hand off
+      // to the detached runner. Same path the queue drainer uses.
+      await startResumeTurn(fresh, project, userText, controller);
       // The runner owns the claim now; its finally releases (or hands off) the slot.
       launched = true;
-      return new Response(JSON.stringify({ ok: true, generation: gen }), {
+      return new Response(JSON.stringify({ ok: true, generation: fresh.generation }), {
         status: 202,
         headers: { "Content-Type": "application/json" },
       });

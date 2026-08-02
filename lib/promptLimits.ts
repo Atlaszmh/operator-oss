@@ -16,6 +16,9 @@ export const PASTE_ATTACH_THRESHOLD = 100_000; // ~100 KB
 
 /** Server: hard cap on a single message's characters (POST /messages). Big
  *  content should ride as an attachment, whose bytes never enter the prompt. */
+export const TOO_LARGE_MESSAGE = (): string =>
+  `Message too large (over ${Math.floor(MAX_MESSAGE_CHARS / 1024)} KB). Paste big text as an attachment instead — it'll be saved as a file and read on demand, keeping it out of the prompt.`;
+
 export const MAX_MESSAGE_CHARS = 262_144; // 256 KB
 
 // Each provider phrases a context-window overflow differently, and the recovery

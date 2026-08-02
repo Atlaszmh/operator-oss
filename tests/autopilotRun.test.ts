@@ -1,0 +1,205 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// The controller, end to end: the REAL runner, the REAL git, the REAL store.
+// Only the two things that reach outside the box are scripted — the agent's turn
+// and the gate's verdict — so what's actually under test is whether the
+// scheduler starts, gates, merges and hands back correctly.
+//
+// lib/gates is mocked here, which is exactly why the gate's own tests live in
+// tests/autopilot.test.ts: a file can't both replace a module and test it.
+const { runTurnMock } = vi.hoisted(() => ({ runTurnMock: vi.fn() }));
+vi.mock("@/lib/agents/claude/driver", () => ({
+  claudeDriver: {
+    id: "claude",
+    label: "Scripted Fake",
+    runTurn: (task: unknown, project: unknown, userText: string, ac?: unknown) =>
+      runTurnMock(task, project, userText, ac),
+  },
+}));
+
+const { gateMock, advisoryMock } = vi.hoisted(() => ({ gateMock: vi.fn(), advisoryMock: vi.fn() }));
+vi.mock("@/lib/gates", () => ({
+  runGate: (...a: unknown[]) => gateMock(...a),
+  gateIsAdvisory: () => advisoryMock(),
+}));
+
+// `gh` isn't reachable from the suite, and the PR is the one step that genuinely
+// leaves the machine. buildFeaturePrBody stays real (it has its own test).
+const { prMock } = vi.hoisted(() => ({ prMock: vi.fn() }));
+vi.mock("@/lib/github", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/github")>()),
+  createBranchPr: (...a: unknown[]) => prMock(...a),
+}));
+
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import { ensureAutopilot, sweep } from "@/lib/autopilot";
+import { createFeatureBranch } from "@/lib/git";
+import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "@/lib/config";
+import { makeRepo } from "./helpers";
+import {
+  createProject,
+  createFeature,
+  createTask,
+  updateFeature,
+  updateProject,
+  getFeature,
+  getTask,
+  setTaskDeps,
+} from "@/lib/store";
+
+beforeEach(() => {
+  gateMock.mockReset();
+  gateMock.mockResolvedValue({ ok: true, feedback: "", testsRan: true, reviewRan: true });
+  advisoryMock.mockReset();
+  advisoryMock.mockReturnValue(false);
+  prMock.mockReset();
+  prMock.mockResolvedValue({ ok: true, url: "https://example/pull/7" });
+  runTurnMock.mockReset();
+  // Default scripted turn: write a file into the worktree so there is something
+  // real to merge, then end. The runner settles it to awaiting_input=1, which is
+  // the "handed back to the user" state autopilot gates on.
+  runTurnMock.mockImplementation(async function* (task: { id: string; worktree_path: string }) {
+    yield { type: "session", sessionId: `s-${task.id}` };
+    if (task.worktree_path) fs.writeFileSync(`${task.worktree_path}/${task.id}.txt`, "work\n");
+    yield { type: "assistant", content: "done" };
+    yield { type: "done", sessionId: `s-${task.id}` };
+  });
+  process.env.ORCH_FEATURE_AUTOPILOT = "1";
+});
+
+afterEach(() => {
+  delete process.env.ORCH_FEATURE_AUTOPILOT;
+});
+
+/** A project on a real repo with an autopilot feature on its own integration
+ *  branch, plus `n` committed member tasks. Nothing is started yet. */
+async function planFixture(n: number, opts: { autopilot?: boolean } = {}) {
+  const repo = await makeRepo();
+  const project = updateProject(createProject({ name: `P-${Math.random().toString(36).slice(2, 8)}` }).id, {
+    repo_path: repo,
+    branch: "main",
+  })!;
+  const created = createFeature({ project_id: project.id, name: `Feat-${Math.random().toString(36).slice(2, 8)}` });
+  const branch = `feature/${created.id}`;
+  await createFeatureBranch(repo, branch, "main");
+  // Re-read: updateFeature returns the fresh row, and `created` still carries
+  // the empty branch it was made with.
+  const feature = updateFeature(created.id, { branch, autopilot: opts.autopilot === false ? 0 : 1 })!;
+  const tasks = Array.from({ length: n }, (_, i) =>
+    createTask({
+      project_id: project.id,
+      title: `Task ${i + 1}`,
+      description: `do thing ${i + 1}`,
+      feature_id: feature.id,
+    })
+  );
+  return { repo, project, feature, tasks };
+}
+
+/** Which member tasks the scheduler has actually launched a turn for. */
+const launchedIds = () => runTurnMock.mock.calls.map((c) => (c[0] as { id: string }).id);
+
+describe("autopilot scheduler", () => {
+  it("does nothing when the feature's switch is off", async () => {
+    const { project, tasks } = await planFixture(2, { autopilot: false });
+    await sweep(project.id);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(tasks.every((t) => getTask(t.id)!.started === 0)).toBe(true);
+    expect(runTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("starts ready members up to the concurrency cap", async () => {
+    const { project } = await planFixture(AUTOPILOT_CONCURRENCY + 2);
+    // Park the gate so the event-driven loop can't race ahead and free slots
+    // while we're counting.
+    gateMock.mockImplementation(() => new Promise(() => {}));
+    await sweep(project.id);
+    expect(launchedIds()).toHaveLength(AUTOPILOT_CONCURRENCY);
+  });
+
+  it("will not start a task whose dependency has not landed", async () => {
+    const { project, tasks } = await planFixture(2);
+    setTaskDeps(tasks[1].id, [tasks[0].id]);
+    gateMock.mockImplementation(() => new Promise(() => {}));
+    await sweep(project.id);
+    expect(launchedIds()).toEqual([tasks[0].id]);
+  });
+
+  it("merges a passing task into the feature branch and marks it done", async () => {
+    const { repo, project, feature, tasks } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 15_000 });
+
+    const t = getTask(tasks[0].id)!;
+    expect(t.merged_at).toBeGreaterThan(0);
+    expect(t.blocked_reason).toBe("");
+    // The work is really on the integration branch, not merely flagged as done.
+    const files = execFileSync("git", ["-C", repo, "ls-tree", "--name-only", feature.branch], { encoding: "utf8" });
+    expect(files).toContain(`${tasks[0].id}.txt`);
+  }, 30_000);
+
+  it("feeds a failing gate back as a turn, then blocks at the attempt cap", async () => {
+    const { project, tasks } = await planFixture(1);
+    gateMock.mockResolvedValue({ ok: false, feedback: "You left a TODO.", testsRan: true, reviewRan: true });
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.blocked_reason).not.toBe(""), { timeout: 15_000 });
+    const t = getTask(tasks[0].id)!;
+    expect(t.status).not.toBe("done");
+    expect(t.awaiting_input).toBe(1);
+    expect(t.blocked_reason).toContain("You left a TODO.");
+    // The initial turn plus at most one retry per allowed attempt — bounded, not
+    // an agent looping through the user's quota.
+    expect(launchedIds()).toHaveLength(AUTOPILOT_ATTEMPTS + 1);
+  }, 30_000);
+
+  it("keeps working an independent sibling while one member is blocked", async () => {
+    const { project, tasks } = await planFixture(2);
+    const [bad, good] = tasks;
+    gateMock.mockImplementation(async (task: { id: string }) =>
+      task.id === bad.id
+        ? { ok: false, feedback: "nope", testsRan: true, reviewRan: true }
+        : { ok: true, feedback: "", testsRan: true, reviewRan: true }
+    );
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(
+      () => {
+        expect(getTask(bad.id)!.blocked_reason).not.toBe("");
+        expect(getTask(good.id)!.status).toBe("done");
+      },
+      { timeout: 20_000 }
+    );
+  }, 40_000);
+
+  it("hands the finished feature back as one PR, exactly once", async () => {
+    const { project, feature, tasks } = await planFixture(2);
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getFeature(feature.id)!.pr_url).toBe("https://example/pull/7"), { timeout: 20_000 });
+    expect(tasks.every((t) => getTask(t.id)!.status === "done")).toBe(true);
+    // A later sweep must not open a second PR for the same feature.
+    await sweep(project.id);
+    expect(prMock).toHaveBeenCalledTimes(1);
+    expect(prMock.mock.calls[0][0]).toMatchObject({ branch: feature.branch, baseBranch: "main" });
+  }, 40_000);
+
+  it("in shadow mode it gates but never merges", async () => {
+    advisoryMock.mockReturnValue(true);
+    const { project, tasks } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.blocked_reason).not.toBe(""), { timeout: 15_000 });
+    const t = getTask(tasks[0].id)!;
+    expect(gateMock).toHaveBeenCalled();
+    expect(t.status).not.toBe("done");
+    expect(t.merged_at).toBe(0);
+    expect(t.blocked_reason).toMatch(/shadow mode/i);
+  }, 30_000);
+});

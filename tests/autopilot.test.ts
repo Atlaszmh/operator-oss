@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// The reviewer half of the gate is scripted: it's an LLM turn, and what these
-// tests pin is the gate's WIRING (what runs, in what order, what a failure
-// produces), not the reviewer's judgement.
+// Unit-level autopilot: the schema, the scheduler's queries, the verdict parser,
+// and the gate. The gate's REVIEWER is scripted — it's an LLM turn, and what
+// these pin is the gate's wiring (what runs, in what order, what a failure
+// produces), not the reviewer's judgement. The controller that drives all of
+// this lives in tests/autopilotRun.test.ts, which has to mock lib/gates and so
+// can't also be the file that tests it.
 const { reviewMock } = vi.hoisted(() => ({ reviewMock: vi.fn() }));
 vi.mock("@/lib/agents/oneshots", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/agents/oneshots")>()),
   reviewTask: (prompt: string, cwd: string) => reviewMock(prompt, cwd),
 }));
 
+import fs from "node:fs";
 import { runGate } from "@/lib/gates";
 import { parseVerdict } from "@/lib/agents/shared";
 import { buildFeaturePrBody } from "@/lib/github";
@@ -20,13 +24,13 @@ import {
   createTask,
   updateFeature,
   updateTask,
+  updateProject,
   listFeatures,
   getFeature,
   getTask,
   setTaskDeps,
   featureMembers,
   readyMembers,
-  updateProject,
 } from "@/lib/store";
 
 beforeEach(() => {
@@ -112,7 +116,7 @@ describe("readyMembers", () => {
     expect(ids).toHaveLength(2);
 
     // The dependency landing is what makes the dependent startable — the whole
-    // point of the graph having a consumer.
+    // point of the graph finally having a consumer.
     updateTask(dep.id, { status: "done" });
     expect(readyMembers(f.id).map((t) => t.id)).toContain(afterDep.id);
   });
@@ -149,10 +153,9 @@ describe("runGate", () => {
   });
 
   it("runs the tests in the task's worktree, not the project repo", async () => {
-    // The marker file exists only in the worktree's branch, so a command that
-    // requires it passes there and would fail in the shared checkout.
+    // The marker file exists only in the worktree, so a command that requires it
+    // passes there and would fail in the shared checkout.
     const { project, feature, task } = await gateFixture({ test_command: "test -f only-here.txt" });
-    const fs = await import("node:fs");
     fs.writeFileSync(`${task.worktree_path}/only-here.txt`, "x");
     const v = await runGate(task, project, feature);
     expect(v.testsRan).toBe(true);

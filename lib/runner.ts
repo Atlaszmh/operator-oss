@@ -7,15 +7,16 @@
 // /messages streams (including zero) can watch; disconnects never touch the
 // turn. Stopping is only ever explicit, via lib/abort.ts (/abort route).
 
+import fs from "node:fs";
 import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting, taskBaseBranch } from "@/lib/store";
 import { getDriver } from "@/lib/agents/registry";
 import { extractOutcome } from "@/lib/agents/shared";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
 import { publish } from "@/lib/events";
-import { worktreeSyncStatus, fastForwardWorktree } from "@/lib/git";
+import { worktreeSyncStatus, fastForwardWorktree, ensureWorktree } from "@/lib/git";
 import { track } from "@/lib/analytics";
-import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE } from "@/lib/promptLimits";
+import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE, MAX_MESSAGE_CHARS, TOO_LARGE_MESSAGE } from "@/lib/promptLimits";
 import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
 import { isUsageLimit, USAGE_LIMIT_NOTICE } from "@/lib/usageLimit";
 import { markAgentAuthBroken, clearAgentAuthBroken } from "@/lib/agents/connections";
@@ -71,6 +72,90 @@ export function startTurn(task: Task, project: Project, userText: string, syncNo
       console.error(`[runner] could not settle task ${task.id} after crash:`, settleErr);
     }
   });
+}
+
+/** What a launch attempt produced. The POST route maps this to a Response;
+ *  autopilot maps a failure to an escalation the user can see. */
+export type LaunchResult = { ok: true; generation: number } | { ok: false; error: string; status: number };
+
+/**
+ * Begin a task's VERY FIRST turn: claim the slot, cut its worktree, and send the
+ * title + description as the prompt.
+ *
+ * Lives here beside startResumeTurn rather than inline in the POST route because
+ * it has a second caller now — lib/autopilot.ts starts the tasks of an approved
+ * plan, and a copy of this over there would be a copy of the worktree self-heal,
+ * the claim ordering, and the size guard, drifting from this one on the first
+ * edit to either.
+ *
+ * Takes the per-task lock itself (the lock is NOT re-entrant), so callers must
+ * not already hold it.
+ */
+export async function startInitialTurn(task: Task, project: Project, controller?: AbortController): Promise<LaunchResult> {
+  const id = task.id;
+  const abortController = controller ?? claimTurn(id);
+  if (!abortController) return { ok: false, error: "a turn is already running on this task", status: 409 };
+
+  let launched = false;
+  try {
+    // The launch runs under the per-task lock shared with the merge/sync/complete
+    // routes: those rewrite the worktree with multi-second git operations, and a
+    // turn starting mid-commit would hand the agent a worktree being staged (and
+    // hand the merge the agent's half-written files). We already hold the turn
+    // slot, so a merge waiting on us sees hasTurn() and 409s.
+    return await withTaskLock(id, async (): Promise<LaunchResult> => {
+      // Re-read under the lock — the task may have moved while we waited (a
+      // merge advancing base_sha, a delete). No hasTurn re-check is needed: the
+      // claim above owns the slot atomically.
+      const fresh = getTask(id);
+      if (!fresh) return { ok: false, error: "not found", status: 404 };
+
+      const userText = `${fresh.title}\n\n${fresh.description}`.trim();
+      if (!userText) return { ok: false, error: "empty message", status: 400 };
+      if (userText.length > MAX_MESSAGE_CHARS) return { ok: false, error: TOO_LARGE_MESSAGE(), status: 413 };
+
+      // Give the task its own git worktree + branch so parallel tasks in the same
+      // repo never collide. This runs on the first turn, but also self-heals a task
+      // whose worktree is missing on disk — e.g. one reopened after its merged
+      // worktree was pruned to reclaim disk. ensureWorktree reattaches to the
+      // surviving branch when it still exists, so the old work is restored.
+      // Non-git/empty repos fall back to running directly in repo_path
+      // (worktree_path stays ""). Best-effort: a git hiccup must not block the run.
+      if (!fresh.worktree_path || !fs.existsSync(fresh.worktree_path)) {
+        try {
+          // Fork from the task's OWN base — its feature's integration branch when
+          // it belongs to one, else the project branch. This is the only place a
+          // worktree is cut, so it's the only place that needs to know.
+          const wt = await ensureWorktree(project.repo_path, fresh.id, taskBaseBranch(fresh, project));
+          if (wt) {
+            fresh.worktree_path = wt.path;
+            fresh.work_branch = wt.branch;
+            fresh.base_sha = wt.baseSha;
+            updateTask(id, { worktree_path: wt.path, work_branch: wt.branch, base_sha: wt.baseSha });
+          }
+        } catch {
+          // fall back to repo_path
+        }
+      }
+
+      const gen = fresh.generation;
+      const userMsg = addMessage(id, gen, "user", `**${fresh.title}** — ${fresh.description}`);
+      // Mark running immediately, but defer `started` until the agent actually
+      // opens a session — so a failed launch leaves the task cleanly retryable.
+      updateTask(id, { running: 1, suggested: 0, awaiting_input: 0 });
+      // Echo to every open stream of this task (other viewers, and the sender
+      // itself — the client renders from events, not optimistically).
+      publish(id, { type: "user", content: userMsg.content, msgId: userMsg.id, generation: gen });
+      startTurn(fresh, project, userText, "", abortController);
+      launched = true;
+      return { ok: true, generation: gen };
+    });
+  } finally {
+    // Every non-launch exit (missing task, empty/oversized prompt, a throw before
+    // the runner took over) must free the claim, or the task would read "running"
+    // forever and every future message would queue into the void.
+    if (!launched) unregisterTurn(id, abortController);
+  }
 }
 
 /**
