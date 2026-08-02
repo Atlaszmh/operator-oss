@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Priority } from "@/lib/types";
 import { Icon } from "../icons";
 import { jget, jsend } from "./api";
 import { relTime, duration } from "./format";
-import { SLABEL, type ProjectRow, type ProjectSession, type TaskRow, type AgentsBundle } from "./types";
-import { agentLabel, defaultAgentFor, findAgent } from "./agents";
+import { SLABEL, modelOptions, reasoningOptions, type ProjectRow, type ProjectSession, type TaskRow, type AgentsBundle, type PickerOption } from "./types";
+import { agentLabel, capsFor, defaultAgentFor, findAgent } from "./agents";
 import { StatusDot, Skel, ErrNote } from "./shared";
 import { Modal, BrowseDirButton, PrioritySeg, DepPicker } from "./Modal";
 import { GitHubClonePicker } from "./github";
@@ -45,11 +45,51 @@ export function AgentPicker({ agents, value, onChange, onConnect, help, label = 
   );
 }
 
-export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpenSetup }: { project: ProjectRow; agents: AgentsBundle; tasks: TaskRow[]; onClose: () => void; onCreate: (i: { title: string; desc: string; priority: Priority; agent: string; startNow: boolean; depends_on: string[] }) => void; onOpenSetup?: () => void }) {
+// Model / reasoning picker for the task modals. A native <select> rather than
+// SessionView's Popover: the Claude list runs to fourteen options across three
+// groups, and the native control brings keyboard navigation, type-ahead, scroll
+// containment and screen-reader semantics with no code to maintain. `value:
+// null` is the synthetic "Default" head — inherit the agent's default.
+export function RunSelect({ label, options, value, onChange }: {
+  label: string; options: PickerOption[]; value: string | null; onChange: (v: string | null) => void;
+}) {
+  // Consecutive options sharing a group render under one <optgroup>, mirroring
+  // how the session toolbar sections the same list.
+  const groups: { group?: string; opts: PickerOption[] }[] = [];
+  for (const o of options) {
+    const last = groups[groups.length - 1];
+    if (last && last.group === o.group) last.opts.push(o);
+    else groups.push({ group: o.group, opts: [o] });
+  }
+  const sel = options.find((o) => o.value === value);
+  return (
+    <div className="field">
+      <div className="lab">{label}</div>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+        {groups.map((g, i) => (
+          <Fragment key={i}>
+            {g.group ? (
+              <optgroup label={g.group}>
+                {g.opts.map((o) => <option key={o.label} value={o.value ?? ""}>{o.label}</option>)}
+              </optgroup>
+            ) : (
+              g.opts.map((o) => <option key={o.label} value={o.value ?? ""}>{o.label}</option>)
+            )}
+          </Fragment>
+        ))}
+      </select>
+      {sel?.sub && <div className="hlp">{sel.sub}</div>}
+    </div>
+  );
+}
+
+export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpenSetup }: { project: ProjectRow; agents: AgentsBundle; tasks: TaskRow[]; onClose: () => void; onCreate: (i: { title: string; desc: string; priority: Priority; agent: string; model: string | null; reasoning: string | null; startNow: boolean; depends_on: string[] }) => void; onOpenSetup?: () => void }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState<Priority>("med");
   const [agent, setAgent] = useState(() => defaultAgentFor(agents, project.default_agent));
+  const [model, setModel] = useState<string | null>(null);
+  const [reasoning, setReasoning] = useState<string | null>(null);
   const [startNow, setStartNow] = useState(false);
   const [deps, setDeps] = useState<string[]>([]);
   const ref = useRef<HTMLInputElement>(null);
@@ -57,7 +97,10 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   // The bundle can arrive after mount; adopt the resolved default until the user picks.
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) setAgent(defaultAgentFor(agents, project.default_agent)); }, [agents, project.default_agent]);
-  const pickAgent = (id: string) => { touched.current = true; setAgent(id); };
+  // The run options come from the selected agent's descriptor, so a Claude model
+  // value means nothing after a switch to Codex — reset both.
+  const pickAgent = (id: string) => { touched.current = true; setAgent(id); setModel(null); setReasoning(null); };
+  const caps = capsFor(agents, agent);
   const can = title.trim().length > 0;
   // A task with unfinished blockers can't start now, so the two options are exclusive.
   const blocked = deps.some((id) => tasks.find((t) => t.id === id)?.status !== "done");
@@ -66,7 +109,7 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   const selAgent = findAgent(agents, agent);
   const agentReady = selAgent ? selAgent.authenticated : true;
   const canStart = !blocked && agentReady;
-  const create = () => can && onCreate({ title: title.trim(), desc: desc.trim(), priority, agent, startNow: startNow && canStart, depends_on: deps });
+  const create = () => can && onCreate({ title: title.trim(), desc: desc.trim(), priority, agent, model, reasoning, startNow: startNow && canStart, depends_on: deps });
   return (
     <Modal title="New task" sub={`${project.name} · title + description become ${agentLabel(agents, agent)}'s first prompt`} onClose={onClose}
       footer={<>
@@ -89,6 +132,8 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
         <div className="hlp">Project context is prepended automatically — no need to restate the stack or conventions.</div>
       </div>
       <AgentPicker agents={agents} value={agent} onChange={pickAgent} onConnect={onOpenSetup} />
+      <RunSelect label="Model" options={modelOptions(caps)} value={model} onChange={setModel} />
+      <RunSelect label="Reasoning" options={reasoningOptions(caps)} value={reasoning} onChange={setReasoning} />
       <div className="field">
         <div className="lab">Priority</div>
         <PrioritySeg value={priority} onChange={setPriority} />
@@ -98,17 +143,25 @@ export function NewTaskModal({ project, agents, tasks, onClose, onCreate, onOpen
   );
 }
 
-export function EditTaskModal({ task, tasks, onClose, onSave, onDelete }: { task: TaskRow; tasks: TaskRow[]; onClose: () => void; onSave: (id: string, patch: { title: string; description: string; priority: Priority; depends_on: string[] }) => void; onDelete: (id: string) => void }) {
+export function EditTaskModal({ task, tasks, agents, onClose, onSave, onDelete }: {
+  task: TaskRow; tasks: TaskRow[]; agents: AgentsBundle; onClose: () => void;
+  onSave: (id: string, patch: { title: string; description: string; priority: Priority; model: string | null; reasoning: string | null; depends_on: string[] }) => void;
+  onDelete: (id: string) => void;
+}) {
   const [title, setTitle] = useState(task.title);
   const [desc, setDesc] = useState(task.description);
   const [priority, setPriority] = useState<Priority>(task.priority);
   const [deps, setDeps] = useState<string[]>(task.depends_on ?? []);
+  const [model, setModel] = useState<string | null>(task.model);
+  const [reasoning, setReasoning] = useState<string | null>(task.reasoning);
+  // A task's agent is fixed at creation, so the options never change under us.
+  const caps = capsFor(agents, task.agent);
   const [confirmDel, setConfirmDel] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
   const can = title.trim().length > 0;
   const candidates = useMemo(() => tasks.filter((t) => t.id !== task.id), [tasks, task.id]);
-  const save = () => can && onSave(task.id, { title: title.trim(), description: desc.trim(), priority, depends_on: deps });
+  const save = () => can && onSave(task.id, { title: title.trim(), description: desc.trim(), priority, model, reasoning, depends_on: deps });
   return (
     <Modal title="Edit task" sub="title + description become the agent's first prompt" onClose={onClose}
       footer={<>
@@ -135,6 +188,8 @@ export function EditTaskModal({ task, tasks, onClose, onSave, onDelete }: { task
         <div className="lab">Priority</div>
         <PrioritySeg value={priority} onChange={setPriority} />
       </div>
+      <RunSelect label="Model" options={modelOptions(caps)} value={model} onChange={setModel} />
+      <RunSelect label="Reasoning" options={reasoningOptions(caps)} value={reasoning} onChange={setReasoning} />
       <DepPicker candidates={candidates} value={deps} onChange={setDeps} />
       {confirmDel && (
         <div className="hlp" style={{ color: "var(--red)", marginTop: 16 }}>
