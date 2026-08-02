@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { CLAUDE_CAPABILITIES } from "@/lib/agents/claude/capabilities";
 import { CODEX_CAPABILITIES } from "@/lib/agents/codex/capabilities";
+import { buildDelegationGuidance } from "@/lib/agents/shared";
+import type { AgentCapabilities } from "@/lib/agents/types";
 
 // buildDelegationGuidance assumes at most one model per tier — a second one
 // would be silently dropped from the menu, so the descriptors are pinned here
@@ -20,5 +22,44 @@ describe("model tiers", () => {
   it("leaves Claude's pinned and 1M variants untiered — the planner is offered only current families", () => {
     const tiered = CLAUDE_CAPABILITIES.models.filter((m) => m.tier).map((m) => m.value);
     expect(tiered).toEqual(["fable", "opus", "sonnet", "haiku"]);
+  });
+});
+
+describe("buildDelegationGuidance", () => {
+  it("lists Claude's four tiers cheapest-first with a work description each", () => {
+    const g = buildDelegationGuidance(CLAUDE_CAPABILITIES);
+    expect(g).toContain("`haiku`");
+    expect(g).toContain("`fable`");
+    // Untiered options never appear.
+    expect(g).not.toContain("opus[1m]");
+    expect(g).not.toContain("claude-opus-4-6");
+    // Cheapest first, so a skimming planner meets the cheap option before the
+    // expensive one.
+    expect(g.indexOf("`haiku`")).toBeLessThan(g.indexOf("`fable`"));
+  });
+
+  it("gives a two-tier agent a destination for all four categories of work", () => {
+    const g = buildDelegationGuidance(CODEX_CAPABILITIES);
+    expect(g).toContain("gpt-5.1-codex-mini");
+    expect(g).toContain("gpt-5.1-codex-max");
+    // standard + heavy + max all fold onto the top model present.
+    const maxLine = g.split("\n").find((l) => l.includes("gpt-5.1-codex-max"))!;
+    expect(maxLine).toContain("ordinary feature work");
+    expect(maxLine).toContain("multi-file refactors");
+    expect(maxLine).toContain("whole-codebase reasoning");
+  });
+
+  it("names the lowest and highest reasoning presets", () => {
+    const g = buildDelegationGuidance(CLAUDE_CAPABILITIES);
+    expect(g).toContain("`off`");
+    expect(g).toContain("`ultrathink`");
+  });
+
+  it("returns empty for an agent with no tiered models, so the tool reads as it did before", () => {
+    const caps = {
+      ...CLAUDE_CAPABILITIES,
+      models: CLAUDE_CAPABILITIES.models.map(({ tier: _tier, ...m }) => m),
+    } as AgentCapabilities;
+    expect(buildDelegationGuidance(caps)).toBe("");
   });
 });

@@ -5,7 +5,84 @@
 // StreamEvent contract (see lib/agents/types.ts).
 
 import type { Project, Task, AskQuestion, AskAnswers, ToolPeek, DiffLine } from "../types";
+import type { AgentCapabilities, AgentModelOption, ModelTier } from "./types";
+import { getCapabilities } from "./capabilities";
 import { listSummaries } from "../store";
+
+// ---------- suggest_task delegation guidance ----------
+//
+// Which model a PROPOSED task should run on. Both the menu and the rubric are
+// generated from the agent's capability descriptor (models[].tier) instead of
+// written as prose naming models: prose would go on recommending a model after
+// it left the picker, and would do so silently.
+//
+// getCapabilities comes from ./capabilities, never ./registry — see the header
+// of that file for why, and tests/importGraph.test.ts for the enforcement.
+
+const TIER_ORDER: ModelTier[] = ["light", "standard", "heavy", "max"];
+
+const TIER_WORK: Record<ModelTier, string> = {
+  light: "mechanical, well-scoped edits; docs; renames; test scaffolding; anything with a clear recipe",
+  standard: "ordinary feature work in a familiar codebase; straightforward bugfixes",
+  heavy: "multi-file refactors, tricky debugging, design and architecture calls, security-sensitive work",
+  max: "whole-codebase reasoning, novel architecture, or work that needs the largest context window",
+};
+
+/**
+ * The model/reasoning paragraph appended to the suggest_task instructions, or
+ * "" when the agent declares no tiered models — in which case the tool reads
+ * exactly as it did before this feature.
+ *
+ * Sparse tiers fold rather than leaving a gap: each tier's work description
+ * attaches to the lowest PRESENT tier at or above it, and anything above the
+ * highest present tier attaches to that highest tier. Codex ships two models
+ * and still gives all four categories of work somewhere to go.
+ */
+export function buildDelegationGuidance(caps: AgentCapabilities): string {
+  const tiered = new Map<ModelTier, AgentModelOption>();
+  for (const m of caps.models) if (m.tier && !tiered.has(m.tier)) tiered.set(m.tier, m);
+  if (tiered.size === 0) return "";
+
+  const work = new Map<string, string[]>();
+  const attach = (value: string, descriptions: string[]) => work.set(value, [...(work.get(value) ?? []), ...descriptions]);
+  let pending: string[] = [];
+  for (const tier of TIER_ORDER) {
+    pending.push(TIER_WORK[tier]);
+    const m = tiered.get(tier);
+    if (!m) continue;
+    attach(m.value, pending);
+    pending = [];
+  }
+  if (pending.length) {
+    const top = [...TIER_ORDER].reverse().find((t) => tiered.has(t))!;
+    attach(tiered.get(top)!.value, pending);
+  }
+
+  const lines = [
+    `\nWhen you suggest a task, also choose the model it should run on and pass it as \`model\`, ` +
+      `so routine work doesn't run on an expensive model and hard work doesn't fail on a cheap one. ` +
+      `The options for this project, cheapest first:`,
+  ];
+  for (const tier of TIER_ORDER) {
+    const m = tiered.get(tier);
+    if (m) lines.push(`- \`${m.value}\` (${m.label} — ${m.sub}): ${work.get(m.value)!.join("; ")}`);
+  }
+
+  // reasoningOptions runs lowest → highest intensity in every descriptor. The
+  // first/last picks below depend on that ordering and nothing in the type
+  // enforces it, so a new driver that lists them out of order breaks this line.
+  const presets = caps.reasoningOptions;
+  if (presets.length > 1) {
+    const lo = presets[0].value;
+    const hi = presets[presets.length - 1].value;
+    lines.push(
+      `\nYou may also pass \`reasoning\`, one of: ${presets.map((r) => `\`${r.value}\``).join(", ")}. ` +
+        `Use \`${lo}\` for mechanical work, and reserve \`${hi}\` for the single hardest task in the plan.`
+    );
+  }
+  lines.push(`Omit either parameter to inherit the project's default.`);
+  return lines.join("\n");
+}
 
 /**
  * Build the context string that is prepended to every task's session via the
@@ -41,6 +118,12 @@ export function buildProjectContext(project: Project, task: Task): string {
       `2. Proactively — if you notice follow-up work that is out of scope for the CURRENT ` +
       `task, don't do it now; propose it with \`suggest_task\` instead.`
   );
+  // Model/reasoning routing for the tasks it proposes. Built from the agent the
+  // SUGGESTED task will run under — suggest_task sets no agent, so createTask
+  // falls back to projects.default_agent (lib/store.ts) — NOT from the planner's
+  // own task.agent, which would offer Claude values to a plan destined for Codex.
+  const delegation = buildDelegationGuidance(getCapabilities(project.default_agent));
+  if (delegation) lines.push(delegation);
   lines.push(
     `\nYou also have an \`expose_service\` MCP tool. When you start a long-running server ` +
       `(dev server, API, preview, Storybook, etc.) and it's listening, call ` +
