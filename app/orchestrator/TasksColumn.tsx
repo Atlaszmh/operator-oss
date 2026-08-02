@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
-import { isAwaiting, relTime } from "./format";
+import { isAwaiting, modelLabel, relTime } from "./format";
 import { SLABEL, AWAIT_LABEL, SEARCH_MIN, type ProjectRow, type TaskRow, type AgentsBundle, type TaskView } from "./types";
-import { agentLabel } from "./agents";
+import { agentLabel, capsFor } from "./agents";
 import { StatusDot, PriPill, SearchBar, AgentBadge } from "./shared";
 import { TaskCardSkeleton } from "./Layout";
 import { TaskBoard } from "./TaskBoard";
@@ -27,6 +27,9 @@ function TaskCard({ task, agents, selected, running, blockedBy, onSelect }: { ta
         <span className="ttitle">{task.title}</span>
         <span className={`slabel ${awaiting ? "await" : ""}`}>{awaiting ? AWAIT_LABEL : SLABEL[task.status]}</span>
         <AgentBadge label={agentLabel(agents, task.agent)} multi={agents.agents.length > 1} />
+        {/* Its own span, not a prop on AgentBadge — that renders null on
+            single-agent installs and would take the model badge with it. */}
+        {task.model && <span className="model-badge" title={`Runs on ${modelLabel(task.model, capsFor(agents, task.agent))}`}>{modelLabel(task.model, capsFor(agents, task.agent))}</span>}
         <PriPill p={task.priority} />
       </div>
       {blocked && (
