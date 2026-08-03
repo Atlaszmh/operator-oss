@@ -58,6 +58,17 @@ services:
       # Feature flags (lib/features.ts). Managed Services + public service
       # hostnames; empty = off (self-host/local default).
       ORCH_FEATURE_SERVICES: ${ORCH_FEATURE_SERVICES:-}
+      # Autopilot (lib/autopilot.ts) — approve a feature's plan once and its
+      # tasks run, gate themselves, and come back as one PR. Empty = off.
+      # SHADOW is empty-means-ON by default in lib/features.ts, so autopilot
+      # cannot merge anything until it is explicitly set to 0.
+      ORCH_FEATURE_AUTOPILOT: ${ORCH_FEATURE_AUTOPILOT:-}
+      ORCH_FEATURE_AUTOPILOT_SHADOW: ${ORCH_FEATURE_AUTOPILOT_SHADOW:-}
+      # Autopilot tuning (lib/config.ts); empty = the documented defaults
+      # (2 concurrent tasks, 2 gate attempts, 10-minute test timeout).
+      ORCH_AUTOPILOT_CONCURRENCY: ${ORCH_AUTOPILOT_CONCURRENCY:-}
+      ORCH_AUTOPILOT_ATTEMPTS: ${ORCH_AUTOPILOT_ATTEMPTS:-}
+      ORCH_GATE_TEST_TIMEOUT_MS: ${ORCH_GATE_TEST_TIMEOUT_MS:-}
     ports:
       - "127.0.0.1:${ORCH_PORT:?set ORCH_PORT (e.g. 10001)}:3000"
     volumes:
