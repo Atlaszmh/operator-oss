@@ -76,6 +76,8 @@ Most tasks don't need you. They need someone to start them, notice they finished
 
 **You approve the plan.** Open a task and talk to an agent until the spec is right — it writes the shared spec into the feature's context and files the breakdown with `suggest_feature` / `suggest_task({blocked_by})`. When you're happy, **Approve plan** on the feature page accepts every suggested task, cuts an integration branch off your project branch, and starts the queue.
 
+Approving covers the work that arrives *later*, too: anything suggested into an approved feature — the rest of a planner's breakdown, or follow-up work a task discovers while building — is accepted and queued on its own, rather than waiting in the tray for a second click that says the same thing. You can approve an **empty** feature for the same reason: arm it, point a planning task at it, and the plan runs as it's written.
+
 **Then it works.** Tasks whose dependencies have landed start in parallel, up to `ORCH_AUTOPILOT_CONCURRENCY` (default 2). When one finishes, it has to earn its merge:
 
 1. Your project's `test_command` runs **in that task's worktree** — not the shared checkout, so what's tested is exactly what's about to merge.

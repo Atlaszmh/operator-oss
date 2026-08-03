@@ -68,9 +68,12 @@ export function ensureAutopilot(): void {
   subscribeGlobal((taskId, ev) => {
     if ((ev as { type?: string }).type !== "turn_end") return;
     const task = getTask(taskId);
-    // Ungrouped tasks are not autopilot's business — an approved plan is always
-    // a feature, so a task with no feature_id can't be part of one.
-    if (task?.feature_id) void sweep(task.project_id).catch(() => {});
+    // Any turn can be the one that files new work, not just a member's: a
+    // planning task is normally ungrouped, and its suggest_task calls are
+    // exactly what an armed feature is waiting for. Filtering on feature_id
+    // meant a plan landed in the tray and nothing came to collect it. A sweep
+    // for a project with no armed feature is one indexed query and a return.
+    if (task) void sweep(task.project_id).catch(() => {});
   });
 }
 
@@ -122,6 +125,21 @@ async function sweepOnce(projectId: string): Promise<void> {
 }
 
 async function driveFeature(project: Project, feature: Feature): Promise<void> {
+  // 0. On an armed feature a suggestion IS the plan, so accept it. Approving is
+  //    an act with a duration, not an instant: the planner may still be filing,
+  //    and a member that discovers follow-up work files it the same way. Left
+  //    suggested, that work is invisible to BOTH halves of the loop —
+  //    readyMembers skips suggestions and maybeOpenPr doesn't count them — so
+  //    the feature would sail past it and open a PR with the work still in the
+  //    tray. Accepting here is the one rule that makes plan → build → review one
+  //    unbroken run.
+  for (const t of featureMembers(feature.id)) {
+    if (!t.suggested) continue;
+    updateTask(t.id, { suggested: 0 });
+    note(t, "✓ Autopilot accepted this suggested task — this feature's plan is already approved.");
+    publishGlobal(t.id, { type: "task_updated" });
+  }
+
   // 1. Gate everything that finished a turn and is now sitting on the user.
   for (const t of featureMembers(feature.id)) {
     if (!isSettledForGating(t)) continue;

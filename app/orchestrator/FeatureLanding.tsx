@@ -253,14 +253,29 @@ function AutopilotPanel({ feature, project, tasks, onRefresh }: {
         </div>
         <div className="feat-branch-off">
           <div className="fb-copy">
-            Approving accepts {feature.suggested_count > 0 ? `all ${feature.suggested_count} suggested task${feature.suggested_count === 1 ? "" : "s"}` : "this plan"}
-            {!feature.branch && <> and gives the feature its own integration branch off <code>{project.branch}</code></>}, then
-            starts working through {tasks.length} task{tasks.length === 1 ? "" : "s"} in dependency order. Each one has to pass the
-            project&apos;s tests and an independent review before it merges. You&apos;ll be pulled back in only if something gets stuck —
-            and again at the end, to merge the PR.
+            {tasks.length === 0 ? (
+              // Arm-before-plan: nothing is filed yet, so say what it will do
+              // when something is, rather than offering a button for 0 tasks.
+              <>
+                Nothing is filed here yet. Arming now means you don&apos;t have to come back and approve twice — point a
+                planning task at this feature
+                {!feature.branch && <> (it gets its own integration branch off <code>{project.branch}</code>)</>} and every task
+                it suggests is accepted and started as it arrives, in dependency order.
+              </>
+            ) : (
+              <>
+                Approving accepts {feature.suggested_count > 0 ? `all ${feature.suggested_count} suggested task${feature.suggested_count === 1 ? "" : "s"}` : "this plan"}
+                {!feature.branch && <> and gives the feature its own integration branch off <code>{project.branch}</code></>}, then
+                starts working through {tasks.length} task{tasks.length === 1 ? "" : "s"} in dependency order — plus anything the
+                tasks themselves suggest into this feature as they go.
+              </>
+            )}{" "}
+            Each one has to pass the project&apos;s tests and an independent review before it merges. You&apos;ll be pulled back
+            in only if something gets stuck — and again at the end, to merge the PR.
           </div>
-          <button className="btn btn-accent btn-sm" disabled={!!busy || tasks.length === 0} onClick={() => void act("approve")}>
-            {Icon.play()} {busy === "approve" ? "Starting…" : "Approve plan & start"}
+          <button className="btn btn-accent btn-sm" disabled={!!busy} onClick={() => void act("approve")}>
+            {Icon.play()}{" "}
+            {busy === "approve" ? "Starting…" : tasks.length === 0 ? "Arm autopilot" : "Approve plan & start"}
           </button>
         </div>
         {err && <ErrNote>{err}</ErrNote>}

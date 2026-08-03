@@ -34,8 +34,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (!project?.repo_path)
     return NextResponse.json({ error: "this project has no working directory" }, { status: 400 });
 
+  // An empty feature is allowed: arming BEFORE the plan exists is the kickoff
+  // flow — you tell a planning task to break the feature down, and its
+  // suggestions are accepted and started as they land (see driveFeature step 0)
+  // instead of waiting in the tray for a second click that says the same thing
+  // this one already said.
   const members = featureMembers(id);
-  if (!members.length) return NextResponse.json({ error: "this feature has no tasks to approve" }, { status: 400 });
 
   // Cut the integration branch if the feature hasn't got one. This is not
   // optional: an empty features.branch means member tasks merge straight onto

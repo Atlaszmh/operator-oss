@@ -189,6 +189,27 @@ describe("autopilot scheduler", () => {
     expect(prMock.mock.calls[0][0]).toMatchObject({ branch: feature.branch, baseBranch: "main" });
   }, 40_000);
 
+  // Plan → build → review as ONE run: work filed after the approval (a planner
+  // still filing, or a member discovering follow-up work) is accepted and run,
+  // not left in the tray for the feature to sail past.
+  it("accepts tasks suggested into an armed feature and runs them", async () => {
+    const { project, feature } = await planFixture(0);
+    const late = createTask({
+      project_id: project.id,
+      title: "Filed by the planner after approval",
+      feature_id: feature.id,
+      suggested: true,
+    });
+    gateMock.mockImplementation(() => new Promise(() => {}));
+
+    await sweep(project.id);
+
+    expect(getTask(late.id)!.suggested).toBe(0);
+    expect(launchedIds()).toEqual([late.id]);
+    // The feature must not have been called finished while that task was in flight.
+    expect(prMock).not.toHaveBeenCalled();
+  });
+
   it("in shadow mode it gates but never merges", async () => {
     advisoryMock.mockReturnValue(true);
     const { project, tasks } = await planFixture(1);
