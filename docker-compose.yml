@@ -55,9 +55,16 @@ services:
       ORCH_ACCOUNT_ID: ${ORCH_ACCOUNT_ID:-}
       POSTHOG_KEY: ${POSTHOG_KEY:-}
       POSTHOG_HOST: ${POSTHOG_HOST:-}
-      # Feature flags (lib/features.ts). Managed Services + public service
-      # hostnames; empty = off (self-host/local default).
+      # Feature flags (lib/features.ts). Empty = each flag's shipped default,
+      # so an unset var here is "leave it alone", not "off".
+      #
+      # EVERY flag lib/features.ts reads belongs in this block. Compose forwards
+      # only what it names, so a flag that's missing is set in .env, documented
+      # in .env.example, and still invisible to the process — which reads as the
+      # feature being broken rather than unconfigured.
       ORCH_FEATURE_SERVICES: ${ORCH_FEATURE_SERVICES:-}
+      ORCH_FEATURE_OMNI_SEARCH: ${ORCH_FEATURE_OMNI_SEARCH:-}
+      ORCH_FEATURE_LIVE_PREVIEW: ${ORCH_FEATURE_LIVE_PREVIEW:-}
       # Autopilot (lib/autopilot.ts) — approve a feature's plan once and its
       # tasks run, gate themselves, and come back as one PR. Empty = off.
       # SHADOW is empty-means-ON by default in lib/features.ts, so autopilot
