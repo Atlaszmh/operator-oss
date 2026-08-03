@@ -103,7 +103,7 @@ export function useOrchestrator() {
   // runs (once `hydrated` flips) before the async project fetch applies selection,
   // and would wipe the query string while selProj/selTask are still null — so we
   // must read ?project/?task before that happens, not inside the fetch callback.
-  const urlSelRef = useRef<{ project?: string; task?: string; view?: string } | null>(null);
+  const urlSelRef = useRef<{ project?: string; task?: string; feature?: string; view?: string } | null>(null);
   if (urlSelRef.current === null) urlSelRef.current = readUrlSel();
 
   // selProjRef tracks selProj for callbacks/intervals that must read the latest
@@ -179,7 +179,7 @@ export function useOrchestrator() {
 
   // ---------- prefs (appearance/settings/layout/view) + persistence ----------
   const { view, setView, taskView, setTaskView, appearance, setAppearance, settings, setSetting, setSettings, layout, setLayout, hydrated } =
-    usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask });
+    usePrefs({ selProj, selTask, selFeature, urlSelRef, setSelProj, setSelTask, setSelFeature });
 
   // ---------- project recaps + landing decision ----------
   const { recaps, fetchRecap } = useRecaps({ selProj, selTask, tasks, setSelTask, selProjRef });
@@ -246,6 +246,11 @@ export function useOrchestrator() {
       // carry over a task from a different project.) Validity within the project
       // is checked once its tasks load, below.
       if (wantTask && landProj === wantProj) setSelTask(wantTask);
+      // ?feature=… restores an open feature page. URL only, never localStorage:
+      // a task is where you were working and worth resuming across visits, a
+      // feature page is somewhere you looked. Task wins — they're mutually
+      // exclusive, and the session column resolves the same way.
+      else if (url.feature && landProj === wantProj) setSelFeature(url.feature);
       setBooted(true);
     }).catch((e) => {
       setBootError(e instanceof Error ? e.message : String(e));

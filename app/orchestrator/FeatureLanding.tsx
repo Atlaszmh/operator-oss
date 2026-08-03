@@ -12,7 +12,7 @@ import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type 
 // no task is selected. Mirrors ProjectLanding's role one level down: the
 // context that every member task inherits, the progress across them, and the
 // integration branch (when the feature owns one).
-export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTask, onSave, onDelete, onRefresh }: {
+export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTask, onSave, onDelete, onRefresh, onBack }: {
   feature: FeatureRow;
   project: ProjectRow;
   tasks: TaskRow[]; // this feature's members, already filtered by the caller
@@ -21,6 +21,9 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
   onSave: (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onRefresh: () => void; // reload tasks+features after a git action changes them
+  // Single-pane phone layout: this page replaces the task list, so it needs its
+  // own way back (the same affordance SessionView and TasksColumn carry).
+  onBack?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(feature.name);
@@ -56,6 +59,11 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
       <div className="tw" style={{ maxWidth: 760 }}>
         <div className="feat-page">
           <div className="feat-head">
+            {onBack && (
+              <button className="mobile-back" onClick={onBack} title="Back to tasks" aria-label="Back to tasks">
+                {Icon.chevRight({ style: { transform: "rotate(180deg)" } })}
+              </button>
+            )}
             <span className="feat-badge" style={feature.color ? { borderColor: feature.color, color: feature.color } : undefined}>
               {Icon.flag()} Feature
             </span>

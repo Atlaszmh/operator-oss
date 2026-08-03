@@ -27,9 +27,12 @@ class FakeHistory implements HistoryLike {
 const PATH = "/app";
 const MOBILE = true;
 
+// Mirrors the mobilePane derivation in Orchestrator.tsx. A feature page is a
+// "session" pane like a task is — that's the whole point of the feature landing
+// living in the session column.
 function paneOf(sel: NavSel): "projects" | "tasks" | "session" | "settings" {
   if (sel.view === "settings") return "settings";
-  if (sel.proj && sel.task) return "session";
+  if (sel.proj && (sel.task || sel.feature)) return "session";
   if (sel.proj) return "tasks";
   return "projects";
 }
@@ -50,7 +53,11 @@ function pressBack(h: FakeHistory, ref: { sel: NavSel }): string {
 }
 
 const sel = (proj: string | null, task: string | null, view: NavSel["view"] = "workspace"): NavSel =>
-  ({ proj, task, view });
+  ({ proj, task, feature: null, view });
+
+/** A feature page open: mutually exclusive with a task (see selectFeature). */
+const featSel = (proj: string | null, feature: string | null, view: NavSel["view"] = "workspace"): NavSel =>
+  ({ proj, task: null, feature, view });
 
 describe("navHistory — mobile Back via single trap entry", () => {
   it("deep-link to a task: Back steps session → tasks → projects → exit", () => {
@@ -130,5 +137,61 @@ describe("navHistory — mobile Back via single trap entry", () => {
     expect(selectionUrl(sel("P", null), "/app")).toBe("?project=P");
     expect(selectionUrl(sel("P", "T"), "/app")).toBe("?project=P&task=T");
     expect(selectionUrl(sel("P", null, "settings"), "/app")).toBe("?project=P&view=settings");
+  });
+});
+
+// The feature page is the third thing the session column can show, and until
+// this it existed only on desktop: mobilePane ignored `feature`, so tapping a
+// feature header selected it and left you staring at the task list.
+describe("navHistory — the feature page is a pane too", () => {
+  it("opening a feature from the task list shows the session pane, and Back returns to the list", () => {
+    const h = new FakeHistory("/app");
+    const ref = { sel: sel(null, null) };
+    settle(h, ref.sel);
+    settle(h, sel("P", null)); ref.sel = sel("P", null);            // tap project → tasks
+    settle(h, featSel("P", "F")); ref.sel = featSel("P", "F");      // tap feature header
+    expect(paneOf(ref.sel)).toBe("session");
+
+    // Back must land on the TASK LIST, not skip to projects — a feature is a
+    // level, so closeOneLevel has to clear it before it clears the project.
+    expect(pressBack(h, ref)).toBe("tasks");
+    expect(pressBack(h, ref)).toBe("projects");
+    expect(pressBack(h, ref)).toBe("exit");
+  });
+
+  it("deep-links to a feature and survives a refresh", () => {
+    expect(selectionUrl(featSel("P", "F"), "/app")).toBe("?project=P&feature=F");
+    const h = new FakeHistory("/app?project=P&feature=F");
+    const ref = { sel: featSel("P", "F") };
+    settle(h, sel(null, null)); // first effect: selection still loading
+    settle(h, ref.sel);
+    expect(paneOf(ref.sel)).toBe("session");
+    expect(pressBack(h, ref)).toBe("tasks");
+  });
+
+  it("a task outranks a feature in the URL, matching the session column's precedence", () => {
+    // selectTask/selectFeature null each other, so this shouldn't arise — but if
+    // the invariant ever breaks, the URL must agree with what's rendered.
+    const both: NavSel = { proj: "P", task: "T", feature: "F", view: "workspace" };
+    expect(selectionUrl(both, "/app")).toBe("?project=P&task=T");
+  });
+
+  it("switching between features doesn't pile up history entries", () => {
+    const h = new FakeHistory("/app");
+    settle(h, sel(null, null));
+    settle(h, sel("P", null));
+    settle(h, featSel("P", "F1"));
+    const len = h.stack.length;
+    for (let i = 0; i < 5; i++) {
+      settle(h, featSel("P", "F2"));
+      settle(h, featSel("P", "F1"));
+    }
+    expect(h.stack.length).toBe(len);
+    expect(h.stack.filter((e) => (e.state as { trap?: boolean })?.trap).length).toBe(1);
+  });
+
+  it("closeOneLevel clears a feature before the project", () => {
+    expect(closeOneLevel(featSel("P", "F"))).toEqual(featSel("P", null));
+    expect(closeOneLevel(featSel("P", null))).toEqual(featSel(null, null));
   });
 });

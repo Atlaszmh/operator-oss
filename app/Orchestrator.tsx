@@ -173,8 +173,16 @@ export default function Orchestrator() {
   // elements sit side by side. Which pane shows is derived purely from the
   // selection state, so the titlebar "needs you" pill (which drives selection)
   // navigates correctly from any level.
+  // A feature counts as a session-pane selection, exactly like a task: the
+  // feature page renders in the session column, so leaving `feature` out of
+  // this made the whole page desktop-only — tapping a feature header selected
+  // it and left you looking at the unchanged task list.
   const mobilePane: "projects" | "tasks" | "session" | "settings" | "insights" =
-    o.view === "settings" ? "settings" : o.view === "insights" ? "insights" : !project ? "projects" : !task ? "tasks" : "session";
+    o.view === "settings" ? "settings"
+      : o.view === "insights" ? "insights"
+      : !project ? "projects"
+      : !task && !feature ? "tasks"
+      : "session";
 
   const projectsColumn = (
     <ProjectsColumn
@@ -238,6 +246,7 @@ export default function Orchestrator() {
           // selectTask/selectFeature in useOrchestrator).
           <FeatureLanding
             key={feature.id}
+            onBack={isMobile ? () => window.history.back() : undefined}
             feature={feature}
             project={project}
             tasks={o.tasks.filter((t) => t.feature_id === feature.id)}

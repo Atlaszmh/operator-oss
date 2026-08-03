@@ -17,6 +17,9 @@ import type { View } from "./types";
 export interface NavSel {
   proj: string | null;
   task: string | null;
+  /** An open feature page — the session column's third mode, and a nav level of
+   *  its own. Mutually exclusive with `task` (see selectTask/selectFeature). */
+  feature: string | null;
   view: View;
 }
 
@@ -30,7 +33,11 @@ export interface HistoryLike {
 export function selectionUrl(sel: NavSel, pathname: string): string {
   const q = new URLSearchParams();
   if (sel.proj) q.set("project", sel.proj);
+  // A task outranks a feature, matching the session column's own precedence
+  // (task ? SessionView : feature ? FeatureLanding : landing). They're mutually
+  // exclusive by construction, so this only matters if that ever breaks.
   if (sel.task) q.set("task", sel.task);
+  else if (sel.feature) q.set("feature", sel.feature);
   if (sel.view === "settings" || sel.view === "insights") q.set("view", sel.view);
   const s = q.toString();
   return s ? `?${s}` : pathname;
@@ -65,6 +72,9 @@ export function reconcileHistory(h: HistoryLike, pathname: string, sel: NavSel, 
 export function closeOneLevel(sel: NavSel): NavSel {
   if (sel.view === "settings" || sel.view === "insights") return { ...sel, view: "workspace" };
   if (sel.task) return { ...sel, task: null };
+  // Before `proj`: a feature page is a level between the task list and the
+  // project, so Back from it must land on the list, not skip to the projects.
+  if (sel.feature) return { ...sel, feature: null };
   if (sel.proj) return { ...sel, proj: null };
   return sel;
 }

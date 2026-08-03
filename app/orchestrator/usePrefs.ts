@@ -19,12 +19,16 @@ const MOBILE_QUERY = "(max-width: 760px)";
 // alongside the prefs (URL keeps a refresh landing where you were). The setters
 // are passed in so the Back button (popstate) can close one pane level — on
 // mobile this is the only way to step session → tasks → projects.
-export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }: {
+export function usePrefs({ selProj, selTask, selFeature, urlSelRef, setSelProj, setSelTask, setSelFeature }: {
   selProj: string | null;
   selTask: string | null;
-  urlSelRef: MutableRefObject<{ project?: string; task?: string; view?: string } | null>;
+  /** An open feature page. Mirrored and stepped through exactly like selTask —
+   *  on mobile it's a pane of its own, so Back has to be able to close it. */
+  selFeature: string | null;
+  urlSelRef: MutableRefObject<{ project?: string; task?: string; feature?: string; view?: string } | null>;
   setSelProj: (id: string | null) => void;
   setSelTask: (id: string | null) => void;
+  setSelFeature: (id: string | null) => void;
 }) {
   const [view, setView] = useState<View>("workspace");
   const [taskView, setTaskView] = useState<TaskView>("list");
@@ -35,8 +39,8 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
 
   // Latest selection, read by the once-attached popstate handler without
   // re-subscribing. Updated every render (cheap, and refs are render-safe here).
-  const selRef = useRef<NavSel>({ proj: selProj, task: selTask, view });
-  selRef.current = { proj: selProj, task: selTask, view };
+  const selRef = useRef<NavSel>({ proj: selProj, task: selTask, feature: selFeature, view });
+  selRef.current = { proj: selProj, task: selTask, feature: selFeature, view };
 
   // hydrate persisted prefs once
   useEffect(() => {
@@ -61,8 +65,8 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
     // and, on mobile, keep a single Back-trap entry on top while a pane is open
     // so the device Back button steps session → tasks → projects. (See navHistory.)
     const armTrap = window.matchMedia(MOBILE_QUERY).matches;
-    reconcileHistory(window.history, window.location.pathname, { proj: selProj, task: selTask, view }, armTrap);
-  }, [appearance, settings, layout, taskView, selProj, selTask, view, hydrated]);
+    reconcileHistory(window.history, window.location.pathname, { proj: selProj, task: selTask, feature: selFeature, view }, armTrap);
+  }, [appearance, settings, layout, taskView, selProj, selTask, selFeature, view, hydrated]);
 
   // Back button: consume the trap and close exactly one pane level. The setState
   // calls re-run the persist effect, which re-arms the trap if a pane is still
@@ -74,11 +78,12 @@ export function usePrefs({ selProj, selTask, urlSelRef, setSelProj, setSelTask }
       const next = closeOneLevel(selRef.current);
       setSelProj(next.proj);
       setSelTask(next.task);
+      setSelFeature(next.feature);
       setView(next.view);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [setSelProj, setSelTask]);
+  }, [setSelProj, setSelTask, setSelFeature]);
 
   const setAppearanceKey = (k: keyof Appearance, v: string) => setAppearance((a) => ({ ...a, [k]: v }));
   const setSetting = <K extends keyof Settings>(k: K, v: Settings[K]) => setSettings((s) => ({ ...s, [k]: v }));

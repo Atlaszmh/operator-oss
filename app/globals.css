@@ -1320,6 +1320,17 @@ button.tpeek-more:hover{color:var(--accent-ink);}
   .app.mobile .sh-tools{order:2;flex:1 1 100%;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;scrollbar-width:none;}
   .app.mobile .sh-tools::-webkit-scrollbar{display:none;}
   .app.mobile .sh-tools > *{flex:0 0 auto;}
+
+  /* Feature page: on a phone it IS the pane (there's no task list beside it),
+     so it gets the same wrap treatment as the session header — back, badge and
+     Edit share the top row, the name drops to its own line rather than being
+     squeezed to a few characters between them. */
+  .app.mobile .feat-page{margin:10px 0;padding:14px 14px 12px;}
+  .app.mobile .feat-head{flex-wrap:wrap;row-gap:6px;}
+  .app.mobile .feat-title,.app.mobile .feat-name-inp{flex:1 1 100%;order:1;}
+  .app.mobile .feat-title{font-size:17px;}
+  /* Wide content inside the page scrolls itself rather than the whole page. */
+  .app.mobile .feat-ctx{overflow-x:auto;}
   .app.mobile .status-ctl{height:36px;}
 
   /* Composer: 16px text stops iOS from zooming on focus; pad out the bottom for
