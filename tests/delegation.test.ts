@@ -39,15 +39,22 @@ describe("buildDelegationGuidance", () => {
     expect(g.indexOf("`haiku`")).toBeLessThan(g.indexOf("`fable`"));
   });
 
-  it("gives a two-tier agent a destination for all four categories of work", () => {
+  it("gives a three-tier agent a destination for all four categories of work", () => {
     const g = buildDelegationGuidance(CODEX_CAPABILITIES);
-    expect(g).toContain("gpt-5.1-codex-mini");
-    expect(g).toContain("gpt-5.1-codex-max");
-    // standard + heavy + max all fold onto the top model present.
-    const maxLine = g.split("\n").find((l) => l.includes("gpt-5.1-codex-max"))!;
-    expect(maxLine).toContain("ordinary feature work");
-    expect(maxLine).toContain("multi-file refactors");
+    expect(g).toContain("gpt-5.4-mini");
+    expect(g).toContain("gpt-5.4");
+    expect(g).toContain("gpt-5.5");
+    // No `standard` entry, so ordinary work folds UP onto heavy (5.4) rather
+    // than collecting on the frontier model.
+    const heavyLine = g.split("\n").find((l) => l.includes("`gpt-5.4`"))!;
+    expect(heavyLine).toContain("ordinary feature work");
+    expect(heavyLine).toContain("multi-file refactors");
+    const maxLine = g.split("\n").find((l) => l.includes("`gpt-5.5`"))!;
     expect(maxLine).toContain("whole-codebase reasoning");
+    expect(maxLine).not.toContain("ordinary feature work");
+    // Pinned previous versions are picker-only, same rule as Claude's.
+    expect(g).not.toContain("gpt-5.3-codex");
+    expect(g).not.toContain("gpt-5.2");
   });
 
   it("names the lowest and highest reasoning presets", () => {

@@ -71,6 +71,8 @@ export interface TaskRow {
   updated_at: number;
   cost_usd: number; // cumulative dollar spend across all turns of this task
   total_tokens: number; // cumulative tokens (input+output+cache) across all turns
+  cache_read_tokens: number; // of that total, context re-read from the prompt cache (~10% of input price)
+  cache_creation_tokens: number; // of that total, context written INTO the cache (fresh work)
   depends_on: string[]; // task ids this task is blocked by until they're done
   context_tokens: number; // latest turn's input-side tokens ≈ current context-window occupancy
   context_pct: number; // context_tokens as a percent (0–100) of the model's window
@@ -246,7 +248,12 @@ export interface AgentCapabilities {
   costIsEstimated: boolean;   // cost is estimated from tokens × API prices — show with ~
   supportsResume: boolean;    // turns can resume a prior session/thread id
 }
-export interface AgentInfo { id: string; label: string; capabilities: AgentCapabilities; authenticated: boolean; authBroken?: AgentAuthBrokenT | null }
+// How this agent is signed in. "subscription" (a Max/Pro or ChatGPT login) means
+// turns draw on plan quota and cost no marginal money, so a dollar figure is an
+// API-PRICE EQUIVALENT rather than a charge; "api_key" means it really is billed.
+// Mirrors lib/agents/connections.ts AgentConnection; null when not connected.
+export interface AgentAccount { email: string | null; plan: string | null; method: "subscription" | "api_key" }
+export interface AgentInfo { id: string; label: string; capabilities: AgentCapabilities; authenticated: boolean; account?: AgentAccount | null; authBroken?: AgentAuthBrokenT | null }
 export interface AgentsBundle { default: string; agents: AgentInfo[] }
 export const EMPTY_AGENTS: AgentsBundle = { default: "claude", agents: [] };
 

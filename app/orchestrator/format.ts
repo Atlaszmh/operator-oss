@@ -1,6 +1,6 @@
 // Pure formatting + derivation helpers shared across the orchestrator modules.
 import type { AskQuestion, AskAnswers } from "@/lib/types";
-import type { Msg, TaskRow, AgentCapabilities } from "./types";
+import type { Msg, TaskRow, AgentCapabilities, AgentInfo } from "./types";
 
 // Compact token count: 1234 → "1.2k", 1_200_000 → "1.2M".
 export function fmtTokens(n: number): string {
@@ -21,6 +21,86 @@ export function fmtCost(n: number): string {
   if (n <= 0) return "$0.00";
   if (n < 0.01) return "<$0.01";
   return `$${n < 1 ? n.toFixed(3) : n.toFixed(2)}`;
+}
+
+// ---------- the usage chip (tokens + cost, honestly) ----------
+
+// A task's cumulative tokens split by what they actually represent. The raw
+// `total_tokens` sums all four buckets, and in real sessions ~90%+ of it is
+// prompt-cache READS — the same context re-sent on every turn and billed at ~10%
+// of the input rate. Leading with that reads as "this task burned 3.8M tokens"
+// when the model only ever processed ~250k of new material, which is what scares
+// people off. So the chip leads with `fresh` (tokens seen for the first time:
+// in/out plus cache WRITES, which are billed above input rate) and carries cache
+// reads as secondary detail. Defensive ?? 0s: a task row can predate the fields.
+export interface UsageSplit {
+  total: number;      // every bucket summed — what task.total_tokens holds
+  fresh: number;      // in/out + cache writes: material the model processed anew
+  inOut: number;      // prompt + completion tokens, uncached
+  cacheWrite: number; // context written into the cache (billed ~1.25× input)
+  cacheRead: number;  // context re-read from the cache (billed ~0.1× input)
+}
+export function usageSplit(t: Pick<TaskRow, "total_tokens" | "cache_read_tokens" | "cache_creation_tokens">): UsageSplit {
+  const total = t.total_tokens ?? 0;
+  const cacheRead = t.cache_read_tokens ?? 0;
+  const cacheWrite = t.cache_creation_tokens ?? 0;
+  return { total, cacheRead, cacheWrite, inOut: Math.max(0, total - cacheRead - cacheWrite), fresh: Math.max(0, total - cacheRead) };
+}
+
+/**
+ * How to present an agent's dollar figure. Two independent questions:
+ *
+ * - Is the number a MEASUREMENT or an estimate? `costIsEstimated` answers that
+ *   (Codex reports tokens only, so its figure is tokens × published prices).
+ * - Is the number MONEY THE USER SPENDS? Only under api-key auth. On a Max/Pro
+ *   (or ChatGPT) subscription the marginal cost of a turn is $0 — the SDK's
+ *   `total_cost_usd` is what the same tokens would have cost through the API,
+ *   and what's actually consumed is plan quota. Showing a bare "$4.20" there
+ *   reads as a bill for something that was included.
+ *
+ * Either one makes the figure approximate-in-meaning, so both get an `~` plus a
+ * tooltip clause saying which it is. An unknown account (bundle still loading,
+ * agent not connected) keeps the plain billed presentation — we won't claim a
+ * turn was covered by a plan we can't see.
+ */
+export interface CostDisplay {
+  show: boolean;   // render a dollar figure at all
+  approx: boolean; // prefix it with ~
+  note: string;    // tooltip clause explaining what the figure means ("" = a plain billed charge)
+}
+export function costDisplay(agent: AgentInfo | undefined): CostDisplay {
+  const caps = agent?.capabilities;
+  const estimated = caps?.costIsEstimated === true;
+  const show = caps?.reportsCostUsd !== false || estimated;
+  const subscription = agent?.account?.method === "subscription";
+  const plan = agent?.account?.plan;
+  // "Max"/"Pro"/"ChatGPT Plus" → "your Max plan"; unknown/"API" → "your plan".
+  const planName = plan && !/^api$/i.test(plan) ? `your ${plan} plan` : "your plan";
+  const source = estimated ? "estimated from token counts × published API prices" : "API-price equivalent";
+  const note = subscription
+    ? `${source}: this ran on ${planName} login, so it draws on plan quota, not a bill`
+    : estimated
+      ? source
+      : "";
+  return { show, approx: subscription || estimated, note };
+}
+
+// The usage chip's tooltip: the full breakdown the compact chip can't fit, one
+// fact per line. Exact counts here (the chip rounds) — this is the view someone
+// opens precisely because the rounded number surprised them.
+export function usageTooltip(split: UsageSplit, costUsd: number, cost: CostDisplay): string {
+  const n = (v: number) => v.toLocaleString();
+  const lines = [
+    `${n(split.fresh)} new tokens this task: ${n(split.inOut)} in/out · ${n(split.cacheWrite)} written to cache`,
+  ];
+  if (split.cacheRead > 0) {
+    lines.push(`${n(split.cacheRead)} cache reads (context re-read each turn, billed at ~10% of the input rate)`);
+    lines.push(`${n(split.total)} tokens total`);
+  }
+  if (cost.show && costUsd > 0) {
+    lines.push(`${cost.approx ? "~" : ""}${fmtCost(costUsd)}${cost.note ? ` ${cost.note}` : " billed"}`);
+  }
+  return lines.join("\n");
 }
 
 // Context window: the input-side tokens of the latest turn ≈ how full that

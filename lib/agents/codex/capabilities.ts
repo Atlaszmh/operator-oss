@@ -1,30 +1,52 @@
 // Codex's capability descriptor — what the agent can do, as data (rendered
 // into the UI's pickers via GET /api/agents). Split out of driver.ts so it can
 // be read without importing @openai/codex-sdk (an async external under
-// Turbopack — see lib/agents/capabilities.ts). Model values are the
-// gpt-5.x-codex family the CLI accepts; null model = inherit codex's built-in
-// default. Context window mirrors GPT-5's ~272k input.
+// Turbopack — see lib/agents/capabilities.ts). Null model = inherit codex's
+// built-in default (see DEFAULT_CODEX_MODEL in ./pricing).
 
 import type { AgentCapabilities } from "../types";
 import { codexApiKey } from "./auth";
 
+// Every current preset runs the same 272k window, so unlike Claude there's no
+// per-model variation here — but keep it per-entry anyway: this descriptor is
+// what drives the context gauge, and a future preset may differ.
 const CTX = 272_000;
 
 export const CODEX_CAPABILITIES: AgentCapabilities = {
+  // Mirrors the codex CLI's own model preset table (what its `/model` menu
+  // lists), NOT a hand-picked subset: values are the presets' `slug`s, ordered
+  // by their `priority`. "Previous versions" are the presets the CLI tags with
+  // an `upgrade` target — still selectable, and worth offering for the same
+  // reason Claude pins older versions, but not what a new task should default
+  // to. Groups must stay contiguous: the picker opens a new section whenever
+  // `group` changes (SessionView.tsx). Re-check this list when bumping
+  // @openai/codex — the codex model line moves faster than Claude's, and a
+  // stale entry here is a model the CLI no longer accepts.
+  //
   // `tier` marks a delegation target for suggest_task (buildDelegationGuidance
-  // in lib/agents/shared.ts). Max is tier "heavy", not "max": with only two
-  // models the sparse-tier fold collapses standard + heavy + max onto it, and
-  // calling it "max" would leave "ordinary feature work" folding oddly.
+  // in lib/agents/shared.ts), on the CURRENT family only — a pinned previous
+  // version is something a human chooses, never something a planner is offered,
+  // exactly as Claude leaves its own pinned entries untiered. No "standard"
+  // entry: the sparse-tier fold sends ordinary feature work up to the lowest
+  // present tier above it, which is 5.4 — "strong model for everyday coding",
+  // precisely that work. So 5.5 keeps the cases that actually need frontier
+  // reasoning rather than collecting every routine task by default.
   models: [
-    { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max", sub: "most capable", contextWindow: CTX, tier: "heavy" },
-    { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini", sub: "faster, cheaper", contextWindow: CTX, tier: "light" },
+    { value: "gpt-5.5", label: "GPT-5.5", sub: "frontier coding, research, and real-world work", contextWindow: CTX, group: "Latest", tier: "max" },
+    { value: "gpt-5.4", label: "GPT-5.4", sub: "strong model for everyday coding", contextWindow: CTX, group: "Latest", tier: "heavy" },
+    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", sub: "small, fast, and cost-efficient", contextWindow: CTX, group: "Latest", tier: "light" },
+    { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", sub: "previous coding-optimized model", contextWindow: CTX, group: "Previous versions" },
+    { value: "gpt-5.2", label: "GPT-5.2", sub: "previous model for long-running agents", contextWindow: CTX, group: "Previous versions" },
   ],
-  // Off/Think/Think hard/Ultrathink → codex's model_reasoning_effort scale.
+  // Off/Think/Think hard/Ultrathink → codex's model_reasoning_effort scale
+  // (low/medium/high/xhigh — see EFFORT in ./driver.ts). Codex can't disable
+  // reasoning ("minimal" 400s the turn), so "Off" is its floor, "low"; the
+  // subs name the actual effort each preset sends so the picker stays honest.
   reasoningOptions: [
-    { value: "off", label: "Off", sub: "minimal reasoning" },
-    { value: "think", label: "Think", sub: "light reasoning" },
-    { value: "think_hard", label: "Think hard", sub: "deeper reasoning" },
-    { value: "ultrathink", label: "Ultrathink", sub: "maximum reasoning" },
+    { value: "off", label: "Off", sub: "low effort — codex's minimum" },
+    { value: "think", label: "Think", sub: "medium effort (codex default)" },
+    { value: "think_hard", label: "Think hard", sub: "high effort" },
+    { value: "ultrathink", label: "Ultrathink", sub: "extra-high effort" },
   ],
   // Only the modes with a real codex analog are declared. bypassPermissions maps
   // to workspace-write + approvals-never (auto-run); plan maps to a read-only
