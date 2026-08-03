@@ -72,6 +72,23 @@ describe("features — storage and rollup", () => {
     expect(findFeature(other.id, feature.id)).toBeUndefined();
   });
 
+  // A near-miss name doesn't error, it auto-creates — so a planner that HTML-
+  // escapes a name it's copying back forks the plan into a contextless,
+  // branchless duplicate whose tasks never run. Observed in the wild twice.
+  it("findFeature matches a name an agent HTML-escaped, and createFeature decodes it", () => {
+    const project = createProject({ name: "Escaped" });
+    const feature = createFeature({ project_id: project.id, name: "M1 Tools & Economy (core)" });
+    expect(findFeature(project.id, "M1 Tools &amp; Economy (core)")!.id).toBe(feature.id);
+    expect(findFeature(project.id, "m1 tools &AMP; economy  (core)")!.id).toBe(feature.id);
+    expect(findFeature(project.id, "M1 Tools &amp; Economy")).toBeUndefined();
+
+    // No feature to match: the escaped name must not be what gets stored.
+    const fresh = createFeature({ project_id: project.id, name: "Search &amp; Filter" });
+    expect(fresh.name).toBe("Search & Filter");
+    // Decoding &amp; last: an escaped entity stays escaped rather than becoming a tag.
+    expect(createFeature({ project_id: project.id, name: "Render &amp;lt;b&amp;gt;" }).name).toBe("Render &lt;b&gt;");
+  });
+
   it("rolls up progress, excluding suggested from the ratio and cancelled entirely", () => {
     const project = createProject({ name: "Rollup" });
     const f = createFeature({ project_id: project.id, name: "F" });

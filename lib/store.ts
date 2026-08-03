@@ -283,15 +283,44 @@ export function getFeature(id: string): Feature | undefined {
 // name (UNIQUE(project_id, name) makes that unambiguous), then a case-insensitive
 // name. The name paths are what let an agent say `feature: "Billing v2"` without
 // ever having seen an id — the same affordance blocked_by gives for task titles.
+/**
+ * Undo the HTML escaping an agent sometimes applies to a name it is copying
+ * back — `A &amp; B` for a feature genuinely called `A & B`.
+ *
+ * This matters far more than it looks. A name that doesn't match doesn't fail;
+ * it AUTO-CREATES (resolveFeature in lib/agentTools.ts, deliberately, so a
+ * planner doesn't get twenty errors and file nothing). So one escaped ampersand
+ * silently forks a plan into a second feature with no context, no integration
+ * branch and autopilot off — and every task filed into it just never runs.
+ * Observed twice on one project in two days.
+ *
+ * `&amp;` is decoded LAST so `&amp;lt;` doesn't round-trip into a literal `<`.
+ */
+const unescapeName = (s: string) =>
+  s
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:apos|#0*39|#x0*27);/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&");
+
+/** Comparison key for a feature name: entity-decoded, case- and space-insensitive. */
+const nameKey = (s: string) => unescapeName(s).toLowerCase().replace(/\s+/g, " ").trim();
+
 export function findFeature(projectId: string, ref: string): Feature | undefined {
   const key = ref.trim();
   if (!key) return undefined;
   const db = getDb();
   const byId = db.prepare("SELECT * FROM features WHERE id = ? AND project_id = ?").get(key, projectId) as Feature | undefined;
   if (byId) return byId;
-  return db
-    .prepare("SELECT * FROM features WHERE project_id = ? AND name = ? COLLATE NOCASE")
-    .get(projectId, key) as Feature | undefined;
+  // Scan rather than match in SQL: the rule is nameKey's, and a project has a
+  // handful of features. COLLATE NOCASE only ever covered the case half of it.
+  // ponytail: linear scan per lookup, index it if a project ever has hundreds.
+  const k = nameKey(key);
+  return (db.prepare("SELECT * FROM features WHERE project_id = ?").all(projectId) as Feature[]).find(
+    (f) => nameKey(f.name) === k
+  );
 }
 
 export function createFeature(input: {
@@ -311,7 +340,9 @@ export function createFeature(input: {
       `INSERT INTO features (id, project_id, name, description, context, color, position, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, input.project_id, input.name.trim(), input.description ?? "", input.context ?? "", input.color ?? "", position, now, now);
+    // Decode on write too: a name with no existing feature to match still
+    // shouldn't be STORED as "M1 Tools &amp; Economy" and shown to the user.
+    .run(id, input.project_id, unescapeName(input.name).trim(), input.description ?? "", input.context ?? "", input.color ?? "", position, now, now);
   return getFeature(id)!;
 }
 
