@@ -56,7 +56,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // Only stamp merged_at when commits actually landed — a re-ship of an
   // already-merged branch shouldn't reset the date it originally shipped.
-  if (!res.alreadyMerged) updateFeature(feature.id, { merged_at: Date.now() });
+  //
+  // Shipping is also the moment the feature leaves the working set, so it
+  // archives itself in the same write: the Archived section is where it stays
+  // reachable (and restorable) instead of sitting at the top of the task list
+  // forever. Guarded by alreadyMerged for the same reason merged_at is —
+  // re-shipping must not un-do a deliberate Restore.
+  if (!res.alreadyMerged) updateFeature(feature.id, { merged_at: Date.now(), archived: 1 });
 
   const tail = unfinished.length
     ? ` ${unfinished.length} task${unfinished.length === 1 ? " is" : "s are"} still unfinished, so only work already merged into ${feature.branch} landed.`

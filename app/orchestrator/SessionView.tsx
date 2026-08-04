@@ -303,7 +303,16 @@ export function SessionView({ project, task, agents, messages, running, blockedB
               <span className="pic" style={{ width: 16, height: 16, borderRadius: 5, background: project.color, display: "grid", placeItems: "center", color: "#fff", fontSize: 9, fontWeight: 700 }}>{project.name[0]}</span>
               {project.name} <span className="sep">/</span> task
             </div>
-            <div className="sh-title">{task.title}</div>
+            <div className="sh-title">
+              {/* Copyable, because this is the header you're looking at when you
+                  want to tell someone which task you mean. */}
+              {task.key && (
+                <button className="key-chip key-copy" onClick={() => void navigator.clipboard?.writeText(task.key)} title={`Copy ${task.key}`}>
+                  {task.key}
+                </button>
+              )}
+              {task.title}
+            </div>
           </div>
           <div className="sh-tools">
             {task.pr_url && (

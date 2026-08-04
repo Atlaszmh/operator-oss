@@ -123,6 +123,7 @@ function BoardCard({ task, agents, feature, selected, running, blockedBy, mini, 
     >
       <div className="bc-top">
         <StatusDot status={task.status} running={running} awaiting={awaiting} />
+        {task.key && <span className="key-chip">{task.key}</span>}
         <h3 className="bc-title">{task.title}</h3>
         {!mini && <PriPill p={task.priority} />}
       </div>
@@ -315,7 +316,7 @@ export function BoardWorkspace({ project, agents, features = [], tasks, suggeste
   const activeFeatures = features.filter((f) => !f.archived);
   const q = query.trim().toLowerCase();
   const match = (t: TaskRow) =>
-    (!q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q)) &&
+    (!q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q) || (t.key ?? "").toLowerCase().includes(q)) &&
     (!featureFilter || (featureFilter === "_none" ? !t.feature_id : t.feature_id === featureFilter));
   const shown = tasks.filter(match);
   const shownSuggested = suggested.filter(match);

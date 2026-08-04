@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
-import { isAwaiting, modelLabel, relTime } from "./format";
+import { isAwaiting, modelLabel, relTime, featureState, isFinished, FEATURE_STATE_LABEL } from "./format";
 import { SLABEL, AWAIT_LABEL, SEARCH_MIN, STATUSES, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel, capsFor } from "./agents";
 import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip } from "./shared";
@@ -24,6 +24,7 @@ function TaskCard({ task, agents, selected, running, blockedBy, onSelect, featur
     <button className={`task ${selected ? "sel" : ""} ${awaiting ? "awaiting" : ""}`} onClick={onSelect}>
       <div className="task-top">
         <StatusDot status={task.status} running={running} awaiting={awaiting} />
+        {task.key && <span className="key-chip">{task.key}</span>}
         <span className="ttitle">{task.title}</span>
         <span className={`slabel ${awaiting ? "await" : ""}`}>{awaiting ? AWAIT_LABEL : SLABEL[task.status]}</span>
         <AgentBadge label={agentLabel(agents, task.agent)} multi={agents.agents.length > 1} />
@@ -97,25 +98,58 @@ function TaskGroup({ label, tasks, agents, selTaskId, running, blockedBy, onSele
 // Two buttons in a div rather than one button — nesting a button inside a
 // button is invalid HTML, and both affordances are wanted here (unlike the
 // status groups, which have nothing to open).
-function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen }: {
+function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen, onSetArchived }: {
   feature: FeatureRow; collapsed: boolean; onToggle: () => void; onOpen: () => void;
+  onSetArchived: (archived: number) => void;
 }) {
   const pct = feature.total > 0 ? Math.round((feature.done / feature.total) * 100) : 0;
+  // Whether the work actually LANDED, which the ratio alone never said: 8/8 done
+  // and 8/8 done-and-merged-to-main look identical as a fraction.
+  const state = featureState(feature);
+  const label = FEATURE_STATE_LABEL[state];
+  const stateHint =
+    state === "shipped"
+      ? feature.merged_at > 0
+        ? `Merged into the project branch ${relTime(feature.merged_at)}`
+        : "Every task is done and merged"
+      : state === "in_review"
+        ? "The pull request is open and waiting on your review"
+        : "Every task is finished, but not everything has merged yet";
   return (
-    <div className={`feat-group-h ${collapsed ? "is-collapsed" : ""}`} style={feature.color ? { ["--feat-accent" as string]: feature.color } : undefined}>
+    <div className={`feat-group-h ${collapsed ? "is-collapsed" : ""}`} data-state={state} data-archived={feature.archived ? "1" : "0"} style={feature.color ? { ["--feat-accent" as string]: feature.color } : undefined}>
       <button className="fgh-chev" onClick={onToggle} title={`${collapsed ? "Show" : "Hide"} tasks in ${feature.name}`} aria-expanded={!collapsed}>
         {Icon.chevDown({ className: "tgh-chev" })}
       </button>
       <button className="fgh-name" onClick={onOpen} title={`Open ${feature.name} — context, progress and branch`}>
+        {feature.key && <span className="key-chip">{feature.key}</span>}
         <span className="fgh-title">{feature.name}</span>
-        {feature.branch && <span className="fgh-branch" title={`Integration branch: ${feature.branch}`}>{Icon.git()}{feature.branch}</span>}
+        {/* Dropped once it's shipped: the branch has landed, so it's the least
+            interesting thing on the row — and this row is the tightest one. */}
+        {feature.branch && state !== "shipped" && <span className="fgh-branch" title={`Integration branch: ${feature.branch}`}>{Icon.git()}{feature.branch}</span>}
       </button>
+      {/* Only shipped / in review / done get a pill. Building and planned don't:
+          the ratio and the bar already say it, and a pill on every tile is a
+          pill that means nothing. */}
+      {label && (
+        <span className={`fgh-state s-${state}`} title={stateHint}>
+          {state === "shipped" && Icon.check()}{label}
+        </span>
+      )}
       {/* Suggested members are counted separately: they're proposals, not
           committed work, so folding them into the denominator would report
           progress against work nobody has accepted. */}
       {feature.suggested_count > 0 && <span className="fgh-sug" title={`${feature.suggested_count} suggested, not yet accepted`}>+{feature.suggested_count}</span>}
       {feature.awaiting_count > 0 && <span className="fgh-await" title={`${feature.awaiting_count} waiting on you`}>{feature.awaiting_count}</span>}
       <span className="fgh-count" title={`${feature.done} of ${feature.total} done`}>{feature.done}/{feature.total}</span>
+      {/* Archive from here rather than only from the feature page: a finished
+          feature is exactly the one you don't want to open again. */}
+      <button
+        className="fgh-arch"
+        onClick={() => onSetArchived(feature.archived ? 0 : 1)}
+        title={feature.archived ? `Bring ${feature.name} back into the working set` : `Archive ${feature.name} — its tasks stay filed under it`}
+      >
+        {feature.archived ? Icon.restore() : Icon.archive()}
+      </button>
       <span className="fgh-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>
     </div>
   );
@@ -150,15 +184,18 @@ const STATUS_RANK = new Map(STATUSES.map((s, i) => [s, i]));
 const byStatus = (a: TaskRow, b: TaskRow) =>
   (STATUS_RANK.get(a.status) ?? 9) - (STATUS_RANK.get(b.status) ?? 9);
 
-// One feature's section: header plus its (collapsible) tasks.
-function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, onSelect, onOpen }: {
+// One feature's section: header plus its (collapsible) tasks. Finished features
+// default to collapsed — a shipped feature is history, and folding it is the
+// whole reason its tasks stay filed under it instead of scattering.
+function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, onSelect, onOpen, onSetArchived }: {
   feature: FeatureRow; tasks: TaskRow[]; agents: AgentsBundle; selTaskId: string | null;
   running: Set<string>; blockedBy: Map<string, string[]>; onSelect: (id: string) => void; onOpen: () => void;
+  onSetArchived: (archived: number) => void;
 }) {
-  const [collapsed, toggle] = useCollapsed(`orch_feat_collapsed_${feature.id}`, false);
+  const [collapsed, toggle] = useCollapsed(`orch_feat_collapsed_${feature.id}`, isFinished(featureState(feature)));
   return (
     <>
-      <FeatureGroupHeader feature={feature} collapsed={collapsed} onToggle={toggle} onOpen={onOpen} />
+      <FeatureGroupHeader feature={feature} collapsed={collapsed} onToggle={toggle} onOpen={onOpen} onSetArchived={onSetArchived} />
       {!collapsed && tasks.map((t) => (
         <TaskCard
           key={t.id} task={t} agents={agents} selected={t.id === selTaskId}
@@ -169,11 +206,11 @@ function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, o
   );
 }
 
-export function TasksColumn({ project, agents, features, tasks, suggested, selTaskId, running, blockedBy, width, loading, view, onSetView, onMoveTask, onSelectTask, onSelectFeature, onNewTask, onNewFeature, onEditContext, onShowSessions, onShowRecap, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, onCollapse, mobile, onBack }: {
+export function TasksColumn({ project, agents, features, tasks, suggested, selTaskId, running, blockedBy, width, loading, view, onSetView, onMoveTask, onSelectTask, onSelectFeature, onSetFeatureArchived, onNewTask, onNewFeature, onEditContext, onShowSessions, onShowRecap, onEditTask, onStartSuggestion, onAcceptSuggestion, onDismissSuggestion, onCollapse, mobile, onBack }: {
   project: ProjectRow; agents: AgentsBundle; features: FeatureRow[]; tasks: TaskRow[]; suggested: TaskRow[]; selTaskId: string | null; running: Set<string>; blockedBy: Map<string, string[]>; width: number; loading?: boolean;
   view: TaskView; onSetView: (v: TaskView) => void;
   onMoveTask: (id: string, patch: Partial<Pick<TaskRow, "status" | "suggested">>, orderedIds: string[]) => void;
-  onSelectTask: (id: string) => void; onSelectFeature: (id: string) => void; onNewTask: () => void; onNewFeature: () => void; onEditContext: () => void; onShowSessions: () => void; onShowRecap: () => void;
+  onSelectTask: (id: string) => void; onSelectFeature: (id: string) => void; onSetFeatureArchived: (id: string, archived: number) => void; onNewTask: () => void; onNewFeature: () => void; onEditContext: () => void; onShowSessions: () => void; onShowRecap: () => void;
   onEditTask: (id: string) => void; onCollapse: () => void;
   onStartSuggestion: (id: string) => void; onAcceptSuggestion: (id: string) => void; onDismissSuggestion: (id: string) => void;
   mobile?: boolean; onBack?: () => void;
@@ -185,8 +222,17 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
   // graveyard, not the working set.
   const [doneCollapsed, toggleDone] = useCollapsed(`orch_done_collapsed_${project.id}`, false);
   const [cancelledCollapsed, toggleCancelled] = useCollapsed(`orch_cancelled_collapsed_${project.id}`, true);
+  // Archived features get their own collapsed section at the bottom. Without it
+  // the flag is a one-way trapdoor: archiving hid a feature from every list, and
+  // no list showed archived features, so nothing could ever be restored.
+  const [archivedCollapsed, toggleArchived] = useCollapsed(`orch_archived_collapsed_${project.id}`, true);
   const q = query.trim().toLowerCase();
-  const match = (t: TaskRow) => !q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q);
+  // Keys are matched too, so "tme-42" or just "42" jumps straight to the task —
+  // which is the entire point of having an identifier worth sharing. Optional-
+  // chained because a row's shape here is a JSON assertion, not a checked type:
+  // a route that hands back a bare task must not crash the whole list.
+  const match = (t: TaskRow) =>
+    !q || t.title.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q) || (t.key ?? "").toLowerCase().includes(q);
   const shown = tasks.filter(match);
   const shownSuggested = suggested.filter(match);
   const needsYou = shown.filter((t) => isAwaiting(t));
@@ -194,7 +240,11 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
   // keep everything else. So a project with no features renders exactly as it
   // did before this layer existed — `grouped` is empty and `loose` is all of it.
   const activeFeatures = features.filter((f) => !f.archived);
-  const featureIds = new Set(activeFeatures.map((f) => f.id));
+  // ARCHIVED FEATURES COUNT HERE. They render in their own section further down,
+  // and a task filed under one must stay filed under it — leaving them out meant
+  // archiving a feature sprayed its tasks into the flat status groups, the exact
+  // opposite of what grouping is for (see the note above byStatus).
+  const featureIds = new Set(features.map((f) => f.id));
   // Awaiting tasks are pinned in their own group at the top and must not also
   // appear inside a feature — the status groups already exclude them the same
   // way (`!isAwaiting`), and double-rendering a task would break selection.
@@ -210,7 +260,13 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
   for (const list of byFeature.values()) list.sort(byStatus);
   // A feature renders when it has matching tasks, or — absent a search — always,
   // so a freshly created (still empty) feature is visible enough to fill.
-  const shownFeatures = activeFeatures.filter((f) => (byFeature.get(f.id)?.length ?? 0) > 0 || !q);
+  // Finished ones sink to the bottom of the working set (sort is stable, so
+  // manual position survives within each band) on their way to being archived.
+  const visible = (f: FeatureRow) => (byFeature.get(f.id)?.length ?? 0) > 0 || !q;
+  const shownFeatures = activeFeatures
+    .filter(visible)
+    .sort((a, b) => Number(isFinished(featureState(a))) - Number(isFinished(featureState(b))));
+  const archivedFeatures = features.filter((f) => f.archived && visible(f));
   const groups = {
     a: loose.filter((t) => t.status === "in_progress" && !isAwaiting(t)),
     h: loose.filter((t) => t.status === "on_hold" && !isAwaiting(t)),
@@ -227,7 +283,9 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
     if (list) list.push(s);
     else sugByFeature.set(key, [s]);
   }
-  const featureName = (id: string | null) => (id ? activeFeatures.find((f) => f.id === id)?.name : undefined);
+  // Across ALL features, not just active ones — a suggestion (or an awaiting
+  // task) filed under an archived feature still has to render its name.
+  const featureName = (id: string | null) => (id ? features.find((f) => f.id === id)?.name : undefined);
   const canSearch = tasks.length + suggested.length >= SEARCH_MIN;
   const noMatches = q && shown.length === 0 && shownSuggested.length === 0;
   return (
@@ -282,7 +340,7 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
           <TaskGroup
             label="Needs your input" tasks={needsYou} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy}
             onSelect={onSelectTask} accent
-            featureOf={(t) => (t.feature_id ? activeFeatures.find((f) => f.id === t.feature_id) : undefined)}
+            featureOf={(t) => (t.feature_id ? features.find((f) => f.id === t.feature_id) : undefined)}
             onOpenFeature={onSelectFeature}
           />
           {/* Feature groups sit above the status groups, which now hold only the
@@ -294,6 +352,7 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
               key={f.id} feature={f} tasks={byFeature.get(f.id) ?? []} agents={agents}
               selTaskId={selTaskId} running={running} blockedBy={blockedBy}
               onSelect={onSelectTask} onOpen={() => onSelectFeature(f.id)}
+              onSetArchived={(archived) => onSetFeatureArchived(f.id, archived)}
             />
           ))}
           <TaskGroup label="In progress" tasks={groups.a} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} />
@@ -301,6 +360,30 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
           <TaskGroup label="Not started" tasks={groups.r} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} />
           <TaskGroup label="Done" tasks={groups.g} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} collapsible collapsed={doneCollapsed && !q} onToggle={toggleDone} />
           <TaskGroup label="Cancelled" tasks={groups.x} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} collapsible collapsed={cancelledCollapsed && !q} onToggle={toggleCancelled} />
+          {/* Shipped features land here on their own (POST /features/:id/ship
+              archives as it merges); everything else arrives by the Archive
+              button. Each keeps its tasks, so restoring one restores the group
+              exactly as it was. */}
+          {archivedFeatures.length > 0 && (
+            <>
+              <button
+                className={`task-group-h tgh-btn ${archivedCollapsed && !q ? "is-collapsed" : ""}`}
+                onClick={toggleArchived}
+                title={`${archivedCollapsed ? "Show" : "Hide"} archived features`}
+              >
+                {Icon.chevDown({ className: "tgh-chev" })}
+                Archived <span className="gcount">{archivedFeatures.length}</span><span className="gline" />
+              </button>
+              {(!archivedCollapsed || !!q) && archivedFeatures.map((f) => (
+                <FeatureGroup
+                  key={f.id} feature={f} tasks={byFeature.get(f.id) ?? []} agents={agents}
+                  selTaskId={selTaskId} running={running} blockedBy={blockedBy}
+                  onSelect={onSelectTask} onOpen={() => onSelectFeature(f.id)}
+                  onSetArchived={(archived) => onSetFeatureArchived(f.id, archived)}
+                />
+              ))}
+            </>
+          )}
         </div>
         {shownSuggested.length > 0 && (
           <div className="suggest">

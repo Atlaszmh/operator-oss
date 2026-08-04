@@ -12,6 +12,7 @@ import { Modal, BrowseDirButton, PrioritySeg, DepPicker } from "./Modal";
 import { GitHubClonePicker } from "./github";
 import { Markdown } from "../Markdown";
 import { clientFeatures } from "@/lib/features";
+import { validateKey } from "@/lib/keys";
 
 // Segmented agent picker (Claude Code / Codex …). Hidden when only one agent is
 // registered — nothing to choose. An unauthenticated agent is still selectable
@@ -291,8 +292,15 @@ export function NewFeatureModal({ project, onClose, onCreate }: {
 // "Refresh with AI" job state the modal polls.
 type RefreshState = { status: "idle" | "running" | "done" | "error"; draft: string; error: string; started_at: number };
 
-export function ContextModal({ project, agents, onSetDefaultAgent, onClose, onSave, onDelete, onDeprecate }: { project: ProjectRow; agents: AgentsBundle; onSetDefaultAgent: (agent: string) => void; onClose: () => void; onSave: (p: { name: string; context: string; repo_path: string; branch: string; dev_command: string; setup_command: string; test_command: string }) => void; onDelete: () => void; onDeprecate: () => void }) {
+export function ContextModal({ project, agents, onSetDefaultAgent, onClose, onSave, onDelete, onDeprecate }: { project: ProjectRow; agents: AgentsBundle; onSetDefaultAgent: (agent: string) => void; onClose: () => void; onSave: (p: { name: string; key: string; context: string; repo_path: string; branch: string; dev_command: string; setup_command: string; test_command: string }) => void | Promise<void>; onDelete: () => void; onDeprecate: () => void }) {
   const [name, setName] = useState(project.name);
+  const [key, setKey] = useState(project.key);
+  // Same validator the PATCH route runs, so Save is disabled rather than
+  // round-tripping to a 400 the user has to read out of a toast. Uniqueness is
+  // the server's call (only it sees every project), so that one comes back as a
+  // 409 and is shown here — a taken key is the likely failure, not an exotic one.
+  const keyErr = validateKey(key);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const [context, setContext] = useState(project.context);
   const [repo, setRepo] = useState(project.repo_path);
   const [branch, setBranch] = useState(project.branch);
@@ -393,12 +401,38 @@ export function ContextModal({ project, agents, onSetDefaultAgent, onClose, onSa
         )}
         <span className="spacer" />
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-        <button className="btn btn-accent" onClick={() => onSave({ name, context, repo_path: repo, branch, dev_command: devCmd, setup_command: setupCmd, test_command: testCmd })}>{Icon.check()} Save</button>
+        <button
+          className="btn btn-accent"
+          disabled={!!keyErr}
+          onClick={async () => {
+            setSaveErr(null);
+            try {
+              await onSave({ name, key, context, repo_path: repo, branch, dev_command: devCmd, setup_command: setupCmd, test_command: testCmd });
+            } catch (e) {
+              setSaveErr(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        >{Icon.check()} Save</button>
       </>}>
-      <div className="field">
-        <div className="lab">Project name</div>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+      <div style={{ display: "flex", gap: 14 }}>
+        <div className="field" style={{ flex: 1 }}>
+          <div className="lab">Project name</div>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="field" style={{ flex: "0 0 150px" }}>
+          <div className="lab">Key <span className="opt">— {key || project.key}-1, -2, …</span></div>
+          <input type="text" className="ctx-mono" value={key} maxLength={10} onChange={(e) => setKey(e.target.value.toUpperCase())} />
+        </div>
       </div>
+      {/* Say plainly what a rename does. The key is derived, not stored per row,
+          so changing it re-points every task and feature at once — which is the
+          intended behaviour, but it will strand a key someone already pasted
+          into a commit message. */}
+      <div className="hlp" style={{ marginTop: -8, marginBottom: 14 }}>
+        {keyErr ? <span style={{ color: "var(--red)" }}>{keyErr}</span>
+          : `Every task and feature in this project is identified by this prefix. Changing it renames all of them.`}
+      </div>
+      {saveErr && <ErrNote style={{ marginBottom: 14 }}>{saveErr}</ErrNote>}
       <div className="field">
         <div className="lab ctx-lab">
           <span>What we&apos;re building</span>

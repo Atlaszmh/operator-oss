@@ -5,6 +5,7 @@ import { getDb } from "./db";
 // (async Turbopack externals) into every module that touches the store and
 // break sync route entries at runtime (see the note in that file).
 import { modelContextWindow } from "./agents/capabilities";
+import { displayKey, normalizeKey, parseKey, uniqueProjectKey } from "./keys";
 import { SERVICE_PORT_BASE } from "./config";
 import type { Project, Task, Feature, FeatureWithCounts, Message, PendingMessage, Summary, Session, Priority, Status, MsgRole, TurnUsage, UsageTotals } from "./types";
 
@@ -105,6 +106,7 @@ export function listAllTasksLite(): {
   id: string;
   project_id: string;
   title: string;
+  key: string;
   status: string;
   running: number;
   awaiting_input: number;
@@ -113,16 +115,18 @@ export function listAllTasksLite(): {
   project_color: string;
   project_icon: string;
 }[] {
-  return getDb()
+  const rows = getDb()
     .prepare(
-      `SELECT t.id, t.project_id, t.title, t.status, t.running, t.awaiting_input, t.updated_at,
-         p.name AS project_name, p.color AS project_color, p.icon AS project_icon
+      `SELECT t.id, t.project_id, t.title, t.seq, t.status, t.running, t.awaiting_input, t.updated_at,
+         p.key AS project_key, p.name AS project_name, p.color AS project_color, p.icon AS project_icon
        FROM tasks t
        JOIN projects p ON p.id = t.project_id
        WHERE t.suggested = 0 AND p.deprecated = 0
        ORDER BY t.updated_at DESC`
     )
-    .all() as ReturnType<typeof listAllTasksLite>;
+    .all() as (ReturnType<typeof listAllTasksLite>[number] & { seq: number; project_key: string })[];
+  // Cross-project, so the prefix comes from the join rather than one lookup.
+  return rows.map((r) => ({ ...r, key: displayKey(r.project_key, r.seq) }));
 }
 
 export function createProject(input: {
@@ -144,12 +148,40 @@ export function createProject(input: {
   const defaultAgent = getSetting("default_agent") || "claude";
   getDb()
     .prepare(
-      `INSERT INTO projects (id, name, icon, sub, color, context, repo_path, branch, default_agent, port, position, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO projects (id, name, icon, sub, color, context, repo_path, branch, default_agent, port, key, position, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(id, input.name, icon, input.sub ?? "", input.color ?? "#C2603C", input.context ?? "", input.repo_path ?? "", input.branch ?? "main", defaultAgent, nextServicePort(), position, now);
+    .run(id, input.name, icon, input.sub ?? "", input.color ?? "#C2603C", input.context ?? "", input.repo_path ?? "", input.branch ?? "main", defaultAgent, nextServicePort(), nextProjectKey(input.name), position, now);
   return getProject(id)!;
 }
+
+// ---------- keys (lib/keys.ts) ----------
+
+/** The key prefix for a new project: derived from its name, deduped app-wide. */
+function nextProjectKey(name: string): string {
+  const taken = (getDb().prepare("SELECT key FROM projects WHERE key != ''").all() as { key: string }[]).map((r) => r.key);
+  return uniqueProjectKey(name, new Set(taken));
+}
+
+/**
+ * Claim the next number for a project, for either a task or a feature — one
+ * counter serves both, so TME-41 and TME-42 may be one of each, exactly as an
+ * issue key works in JIRA.
+ *
+ * Monotonic: it advances the stored counter rather than reading MAX(seq), so
+ * deleting TME-42 cannot hand 42 to the next thing created. Same rule as
+ * nextServicePort(), for the same reason — an identifier that gets recycled
+ * silently repoints every place it was already written down.
+ */
+function nextSeq(projectId: string): number {
+  const db = getDb();
+  db.prepare("UPDATE projects SET key_seq = key_seq + 1 WHERE id = ?").run(projectId);
+  return ((db.prepare("SELECT key_seq FROM projects WHERE id = ?").get(projectId) as { key_seq: number } | undefined)?.key_seq) ?? 0;
+}
+
+/** One project's key prefix, for building the display keys of its rows. */
+const projectKeyOf = (projectId: string): string =>
+  (getDb().prepare("SELECT key FROM projects WHERE id = ?").get(projectId) as { key: string } | undefined)?.key ?? "";
 
 // The next deterministic per-project port: one past the current max (never
 // reusing a freed slot, so a project's port is stable for its lifetime), floored
@@ -179,9 +211,12 @@ export function updateProject(id: string, patch: Partial<Omit<Project, "id" | "c
   getDb()
     .prepare(
       `UPDATE projects SET name = ?, icon = ?, sub = ?, color = ?, context = ?, repo_path = ?, branch = ?,
-        dev_command = ?, setup_command = ?, test_command = ?, default_agent = ?, deprecated = ? WHERE id = ?`
+        dev_command = ?, setup_command = ?, test_command = ?, default_agent = ?, key = ?, deprecated = ? WHERE id = ?`
     )
-    .run(n.name, (n.icon || "?").toUpperCase().slice(0, 1), n.sub, n.color, n.context, n.repo_path, n.branch, n.dev_command ?? "", n.setup_command ?? "", n.test_command ?? "", n.default_agent || "claude", n.deprecated ? 1 : 0, id);
+    // Editing the key re-keys every task and feature in the project at once —
+    // the display key is derived, so there is nothing to backfill. Callers
+    // validate the shape and uniqueness first (see PATCH /api/projects/[id]).
+    .run(n.name, (n.icon || "?").toUpperCase().slice(0, 1), n.sub, n.color, n.context, n.repo_path, n.branch, n.dev_command ?? "", n.setup_command ?? "", n.test_command ?? "", n.default_agent || "claude", normalizeKey(n.key ?? "") || cur.key, n.deprecated ? 1 : 0, id);
   return getProject(id);
 }
 
@@ -215,6 +250,7 @@ export function setProjectRefresh(
 // latest turn's input-side tokens, NOT a cumulative sum (see getTaskContext).
 // `depends_on` lists the task ids this task is blocked by (see task_dependencies).
 export type TaskWithUsage = Task & {
+  key: string; // the rendered "TME-42", derived from the project's key + seq
   cost_usd: number;
   total_tokens: number;
   cache_read_tokens: number;
@@ -260,7 +296,15 @@ export function listTasks(projectId: string): TaskWithUsage[] {
     if (list) list.push(e.depends_on_id);
     else byTask.set(e.task_id, [e.depends_on_id]);
   }
-  return rows.map((r) => ({ ...r, context_pct: contextPct(r.context_tokens, r.agent, r.model), depends_on: byTask.get(r.id) ?? [] }));
+  // The display key is built here rather than joined in SQL: this query is
+  // already project-scoped, so one extra lookup beats a JOIN on every row.
+  const pkey = projectKeyOf(projectId);
+  return rows.map((r) => ({
+    ...r,
+    key: displayKey(pkey, r.seq),
+    context_pct: contextPct(r.context_tokens, r.agent, r.model),
+    depends_on: byTask.get(r.id) ?? [],
+  }));
 }
 
 // ---------- features (the optional project > feature > task layer) ----------
@@ -271,11 +315,13 @@ export function listTasks(projectId: string): TaskWithUsage[] {
 // (updateTask, setTaskStatus, the board's reorder, the runner's turn-end
 // settle) and would drift the first time one of them was missed.
 export function listFeatures(projectId: string): FeatureWithCounts[] {
-  return getDb()
+  const rows = getDb()
     .prepare(
       `SELECT f.*,
          COALESCE(c.total, 0)           AS total,
          COALESCE(c.done, 0)            AS done,
+         COALESCE(c.merged_count, 0)    AS merged_count,
+         COALESCE(c.running_count, 0)   AS running_count,
          COALESCE(c.suggested_count, 0) AS suggested_count,
          COALESCE(c.awaiting_count, 0)  AS awaiting_count,
          COALESCE(c.blocked_count, 0)   AS blocked_count
@@ -284,6 +330,11 @@ export function listFeatures(projectId: string): FeatureWithCounts[] {
          SELECT feature_id,
            SUM(CASE WHEN suggested = 0 AND status != 'cancelled' THEN 1 ELSE 0 END) AS total,
            SUM(CASE WHEN suggested = 0 AND status  = 'done'      THEN 1 ELSE 0 END) AS done,
+           -- Of the total, how many have actually landed. This is what lets a
+           -- feature with no integration branch — whose members merge one at a
+           -- time — still say truthfully whether it shipped (see featureState).
+           SUM(CASE WHEN suggested = 0 AND status != 'cancelled' AND merged_at > 0 THEN 1 ELSE 0 END) AS merged_count,
+           SUM(CASE WHEN running = 1                             THEN 1 ELSE 0 END) AS running_count,
            SUM(CASE WHEN suggested = 1                           THEN 1 ELSE 0 END) AS suggested_count,
            SUM(CASE WHEN status = 'in_progress' AND awaiting_input = 1 THEN 1 ELSE 0 END) AS awaiting_count,
            SUM(CASE WHEN blocked_reason != ''                        THEN 1 ELSE 0 END) AS blocked_count
@@ -293,6 +344,8 @@ export function listFeatures(projectId: string): FeatureWithCounts[] {
        ORDER BY f.position ASC, f.created_at ASC`
     )
     .all(projectId) as FeatureWithCounts[];
+  const pkey = projectKeyOf(projectId);
+  return rows.map((r) => ({ ...r, key: displayKey(pkey, r.seq) }));
 }
 
 export function getFeature(id: string): Feature | undefined {
@@ -334,6 +387,14 @@ export function findFeature(projectId: string, ref: string): Feature | undefined
   const db = getDb();
   const byId = db.prepare("SELECT * FROM features WHERE id = ? AND project_id = ?").get(key, projectId) as Feature | undefined;
   if (byId) return byId;
+  // "TME-42" — but only THIS project's prefix, so another project's key never
+  // resolves to a same-numbered feature here (the caller auto-creates on a miss,
+  // and a wrong-project hit would be far worse than a new empty feature).
+  const parsed = parseKey(key);
+  if (parsed && parsed.prefix === normalizeKey(projectKeyOf(projectId))) {
+    const byKey = db.prepare("SELECT * FROM features WHERE project_id = ? AND seq = ?").get(projectId, parsed.seq) as Feature | undefined;
+    if (byKey) return byKey;
+  }
   // Scan rather than match in SQL: the rule is nameKey's, and a project has a
   // handful of features. COLLATE NOCASE only ever covered the case half of it.
   // ponytail: linear scan per lookup, index it if a project ever has hundreds.
@@ -355,14 +416,16 @@ export function createFeature(input: {
   const position = (
     getDb().prepare("SELECT COALESCE(MAX(position), -1) + 1 AS n FROM features WHERE project_id = ?").get(input.project_id) as { n: number }
   ).n;
-  getDb()
-    .prepare(
-      `INSERT INTO features (id, project_id, name, description, context, color, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    // Decode on write too: a name with no existing feature to match still
-    // shouldn't be STORED as "M1 Tools &amp; Economy" and shown to the user.
-    .run(id, input.project_id, unescapeName(input.name).trim(), input.description ?? "", input.context ?? "", input.color ?? "", position, now, now);
+  getDb().transaction(() => {
+    getDb()
+      .prepare(
+        `INSERT INTO features (id, project_id, name, description, context, color, seq, position, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      // Decode on write too: a name with no existing feature to match still
+      // shouldn't be STORED as "M1 Tools &amp; Economy" and shown to the user.
+      .run(id, input.project_id, unescapeName(input.name).trim(), input.description ?? "", input.context ?? "", input.color ?? "", nextSeq(input.project_id), position, now, now);
+  })();
   return getFeature(id)!;
 }
 
@@ -536,12 +599,14 @@ export function createTask(input: {
   const position = (
     getDb().prepare("SELECT COALESCE(MAX(position), -1) + 1 AS n FROM tasks WHERE project_id = ?").get(input.project_id) as { n: number }
   ).n;
-  getDb()
-    .prepare(
-      `INSERT INTO tasks (id, project_id, feature_id, title, description, priority, status, suggested, agent, model, reasoning, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(id, input.project_id, input.feature_id ?? null, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, input.model ?? null, input.reasoning ?? null, position, now, now);
+  getDb().transaction(() => {
+    getDb()
+      .prepare(
+        `INSERT INTO tasks (id, project_id, feature_id, title, description, priority, status, suggested, agent, model, reasoning, seq, position, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(id, input.project_id, input.feature_id ?? null, input.title, input.description ?? "", input.priority ?? "med", input.suggested ? 1 : 0, agent, input.model ?? null, input.reasoning ?? null, nextSeq(input.project_id), position, now, now);
+  })();
   return getTask(id)!;
 }
 

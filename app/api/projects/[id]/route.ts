@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getProject, updateProject, deleteProject } from "@/lib/store";
-import { listTasks, listFeatures } from "@/lib/store";
+import { listTasks, listFeatures, listProjects } from "@/lib/store";
+import { normalizeKey, validateKey } from "@/lib/keys";
 import { removeWorktree } from "@/lib/git";
 import { removeTaskUploads } from "@/lib/uploads";
 import { abortTurn } from "@/lib/abort";
@@ -21,6 +22,19 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const patch = await req.json();
+  // The key is the one field with app-wide constraints (shape + uniqueness), so
+  // it's checked here rather than in updateProject: the store writes whatever
+  // it's given, and a duplicate key would silently make two projects' tasks
+  // share an identifier. Changing it re-keys every task and feature at once —
+  // that's intended, and the UI says so.
+  if (typeof patch.key === "string") {
+    const invalid = validateKey(patch.key);
+    if (invalid) return NextResponse.json({ error: invalid }, { status: 400 });
+    const key = normalizeKey(patch.key);
+    const clash = listProjects().find((p) => p.id !== id && p.key.toUpperCase() === key);
+    if (clash) return NextResponse.json({ error: `${key} is already ${clash.name}'s key.` }, { status: 409 });
+    patch.key = key;
+  }
   const project = updateProject(id, patch);
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(project);

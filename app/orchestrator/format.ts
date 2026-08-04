@@ -1,6 +1,6 @@
 // Pure formatting + derivation helpers shared across the orchestrator modules.
 import type { AskQuestion, AskAnswers } from "@/lib/types";
-import type { Msg, TaskRow, AgentCapabilities, AgentInfo } from "./types";
+import type { Msg, TaskRow, FeatureRow, AgentCapabilities, AgentInfo } from "./types";
 
 // Compact token count: 1234 → "1.2k", 1_200_000 → "1.2M".
 export function fmtTokens(n: number): string {
@@ -200,6 +200,55 @@ export function duration(start: number, end: number | null): string {
 // parked on the question — that's exactly the case the task list must surface.
 export const isAwaiting = (t: TaskRow) =>
   t.status === "in_progress" && !!t.awaiting_input;
+
+/**
+ * How far along a feature is, derived from the rollup listFeatures() computes.
+ *
+ * Derived, not stored, for the same reason the counts it reads are: a status
+ * column would need writing from every path that touches tasks.status, and
+ * would go wrong the first time one of them was missed.
+ *
+ * The two shipped clauses are the same fact told two ways. A feature WITH an
+ * integration branch has one landing event — merged_at. A feature without one
+ * (the default; the branch is opt-in) never gets a merged_at at all, because its
+ * members merge into the project branch individually — so "every member landed"
+ * is what shipping means for it. Without that second clause the badge would
+ * almost never appear.
+ *
+ * All members done but not all merged is `done`, NOT `shipped` — which is also
+ * what keeps this honest in a project with no working directory, where nothing
+ * can ever merge and so nothing can ever truthfully claim to have shipped.
+ */
+export type FeatureState = "shipped" | "in_review" | "done" | "building" | "planned";
+
+type FeatureProgress = Pick<
+  FeatureRow,
+  "merged_at" | "branch" | "pr_url" | "total" | "done" | "merged_count" | "running_count" | "awaiting_count" | "blocked_count"
+>;
+
+export function featureState(f: FeatureProgress): FeatureState {
+  const allDone = f.total > 0 && f.done === f.total;
+  // Shipped outranks in_review on purpose: a set merged_at means that PR landed.
+  if (f.merged_at > 0) return "shipped";
+  if (!f.branch && allDone && f.merged_count === f.total) return "shipped";
+  if (f.pr_url) return "in_review";
+  if (allDone) return "done";
+  if (f.running_count > 0 || f.done > 0 || f.awaiting_count > 0 || f.blocked_count > 0) return "building";
+  return "planned";
+}
+
+// building/planned get no label: the ratio and progress bar already say it, and
+// a pill on every tile is a pill that means nothing.
+export const FEATURE_STATE_LABEL: Record<FeatureState, string> = {
+  shipped: "Shipped",
+  in_review: "In review",
+  done: "Done",
+  building: "",
+  planned: "",
+};
+
+/** Finished features sort last and fold shut — they're history, not the working set. */
+export const isFinished = (s: FeatureState) => s === "shipped" || s === "done";
 
 // The titles of a task's unfinished blockers (dependencies not yet 'done'). A
 // task with any of these is "blocked" and can't be started until they complete.

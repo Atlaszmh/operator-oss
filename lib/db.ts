@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import path from "node:path";
 import fs from "node:fs";
 import { DB_DIR, PROJECTS_DIR, SERVICE_PORT_BASE } from "./config";
+import { deriveProjectKey, uniqueProjectKey } from "./keys";
 import { loadPersistedApiKey } from "./anthropic-key";
 import { loadPersistedOpenAiKey } from "./openai-key";
 
@@ -40,6 +41,14 @@ export function init(db: Database.Database) {
       port          INTEGER NOT NULL DEFAULT 0,
       -- Which agent driver new tasks in this project run under (lib/agents/).
       default_agent TEXT NOT NULL DEFAULT 'claude',
+      -- JIRA-style keys. "key" is this project's prefix (unique across projects,
+      -- derived from the name and editable); key_seq is the counter its tasks
+      -- AND features draw their number from, so TME-41 and TME-42 may be one of
+      -- each. Monotonic — never decremented, so deleting TME-42 can't hand 42 to
+      -- the next thing created, for the same reason nextServicePort() never
+      -- reuses a freed port. The rendered key is derived (see lib/keys.ts).
+      key         TEXT NOT NULL DEFAULT '',
+      key_seq     INTEGER NOT NULL DEFAULT 0,
       position    INTEGER NOT NULL DEFAULT 0,
       deprecated  INTEGER NOT NULL DEFAULT 0,
       -- 1 for the built-in "Welcome" tutorial project so it's excluded from the
@@ -83,6 +92,8 @@ export function init(db: Database.Database) {
       autopilot   INTEGER NOT NULL DEFAULT 0,
       pr_url      TEXT NOT NULL DEFAULT '',
       archived    INTEGER NOT NULL DEFAULT 0,
+      -- This feature's number from projects.key_seq (0 = never allocated).
+      seq         INTEGER NOT NULL DEFAULT 0,
       position    INTEGER NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL,
@@ -129,6 +140,8 @@ export function init(db: Database.Database) {
       started     INTEGER NOT NULL DEFAULT 0,
       running     INTEGER NOT NULL DEFAULT 0,
       awaiting_input INTEGER NOT NULL DEFAULT 0,
+      -- This task's number from projects.key_seq (0 = never allocated).
+      seq         INTEGER NOT NULL DEFAULT 0,
       position    INTEGER NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL
@@ -309,6 +322,44 @@ function ensureOnboardingFlag(db: Database.Database) {
   if (inUse) db.prepare("INSERT INTO settings (key, value) VALUES ('onboarding_complete', '1')").run();
 }
 
+/**
+ * One-shot: give every existing project a key and number everything under it.
+ *
+ * Gated on a persisted settings marker, the same way the building/conventions
+ * fold is (and for the same reason): re-running it would renumber rows whose
+ * keys people have already pasted into commit messages and PR descriptions.
+ *
+ * Features and tasks are numbered TOGETHER in created_at order because they draw
+ * from one counter — so the numbers come out in the order the work was actually
+ * filed, rather than all features first and then all tasks.
+ */
+function backfillKeys(db: Database.Database) {
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'migrated_keys'").get()) return;
+
+  const projects = db.prepare("SELECT id, name, key FROM projects").all() as { id: string; name: string; key: string }[];
+  const taken = new Set(projects.map((p) => p.key).filter(Boolean));
+  const setProject = db.prepare("UPDATE projects SET key = ?, key_seq = ? WHERE id = ?");
+  const setTaskSeq = db.prepare("UPDATE tasks SET seq = ? WHERE id = ?");
+  const setFeatureSeq = db.prepare("UPDATE features SET seq = ? WHERE id = ?");
+  const featuresOf = db.prepare("SELECT id, created_at FROM features WHERE project_id = ?");
+  const tasksOf = db.prepare("SELECT id, created_at FROM tasks WHERE project_id = ?");
+
+  db.transaction(() => {
+    for (const p of projects) {
+      const key = p.key || uniqueProjectKey(p.name, taken);
+      taken.add(key);
+      const rows = [
+        ...(featuresOf.all(p.id) as { id: string; created_at: number }[]).map((r) => ({ ...r, feature: true })),
+        ...(tasksOf.all(p.id) as { id: string; created_at: number }[]).map((r) => ({ ...r, feature: false })),
+      ].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      let seq = 0;
+      for (const r of rows) (r.feature ? setFeatureSeq : setTaskSeq).run(++seq, r.id);
+      setProject.run(key, seq, p.id);
+    }
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('migrated_keys', '1')").run();
+  })();
+}
+
 // Add columns introduced after a DB was first created (older orchestrator.db files).
 export function migrate(db: Database.Database) {
   const cols = (db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((c) => c.name);
@@ -403,6 +454,13 @@ export function migrate(db: Database.Database) {
   const featureCols = (db.prepare("PRAGMA table_info(features)").all() as { name: string }[]).map((c) => c.name);
   if (!featureCols.includes("autopilot")) db.exec("ALTER TABLE features ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0");
   if (!featureCols.includes("pr_url")) db.exec("ALTER TABLE features ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''");
+  // JIRA-style keys (lib/keys.ts): the prefix + counter on the project, the
+  // number on each task and feature.
+  add("key", "TEXT NOT NULL DEFAULT ''");
+  add("key_seq", "INTEGER NOT NULL DEFAULT 0");
+  if (!taskCols.includes("seq")) db.exec("ALTER TABLE tasks ADD COLUMN seq INTEGER NOT NULL DEFAULT 0");
+  if (!featureCols.includes("seq")) db.exec("ALTER TABLE features ADD COLUMN seq INTEGER NOT NULL DEFAULT 0");
+  backfillKeys(db);
   // The optional feature this task belongs to (NULL = ungrouped, which is what
   // every pre-feature task is). SQLite requires a NULL default when adding a
   // column with a REFERENCES clause, which is exactly what we want anyway.
@@ -484,8 +542,8 @@ function seedIfEmpty(db: Database.Database) {
   const repoPath = scaffoldWelcomeRepo();
 
   db.prepare(
-    `INSERT INTO projects (id, name, icon, sub, color, context, repo_path, branch, port, seeded, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+    `INSERT INTO projects (id, name, icon, sub, color, context, repo_path, branch, port, key, seeded, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
   ).run(
     pid,
     "Welcome",
@@ -496,16 +554,20 @@ function seedIfEmpty(db: Database.Database) {
     repoPath,
     "main",
     SERVICE_PORT_BASE,
+    // The tutorial project needs a key like any other: this runs AFTER migrate(),
+    // so the backfill has already been and gone and would never come back for it.
+    deriveProjectKey("Welcome"),
     now
   );
 
+  let seq = 0;
   const seedTask = (title: string, description: string, priority: string, suggested: number) =>
     db
       .prepare(
-        `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?)`
+        `INSERT INTO tasks (id, project_id, title, description, priority, status, suggested, seq, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?)`
       )
-      .run(nanoid(), pid, title, description, priority, suggested, now, now);
+      .run(nanoid(), pid, title, description, priority, suggested, ++seq, now, now);
 
   // The hands-on task: it drives the full loop in one turn — a question, a
   // one-file edit, a diff to review, a one-click merge. Its title + description
@@ -520,6 +582,10 @@ function seedIfEmpty(db: Database.Database) {
     "med",
     1
   );
+
+  // Leave the counter where the seeded tasks left it, so the first task the user
+  // creates gets the next number rather than colliding with a tutorial one.
+  db.prepare("UPDATE projects SET key_seq = ? WHERE id = ?").run(seq, pid);
 
   db.prepare("INSERT INTO settings (key, value) VALUES ('seed_done', '1')").run();
   // Remember which project is the tutorial so the client can surface coach marks

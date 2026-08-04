@@ -599,11 +599,15 @@ export function useOrchestrator() {
     if (selProj) await loadTasks(selProj, false);
   };
 
-  const saveContext = async (patch: { name: string; context: string; repo_path: string; branch: string; dev_command: string; setup_command: string; test_command: string }) => {
+  const saveContext = async (patch: { name: string; key: string; context: string; repo_path: string; branch: string; dev_command: string; setup_command: string; test_command: string }) => {
     if (!project) return;
     await jsend(`/api/projects/${project.id}`, "PATCH", patch);
     const ps = await jget<ProjectRow[]>("/api/projects");
     setProjects(ps);
+    // Task and feature keys are derived from the project's, so a key change
+    // renames every row at once — reload them rather than leave the list showing
+    // the old prefix until something else happens to refetch.
+    if (patch.key !== project.key) await loadTasks(project.id, false);
     setModal(null);
   };
   const createProject = async (input: { name: string; sub: string; color: string; context: string; repo_path: string; branch?: string }) => {

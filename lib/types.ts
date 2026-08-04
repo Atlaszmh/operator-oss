@@ -18,6 +18,8 @@ export interface Project {
   test_command: string; // optional one-shot test command
   port: number; // deterministic per-project port, injected as PORT into services + the PTY
   default_agent: string; // agent driver new tasks in this project run under (lib/agents/registry.ts)
+  key: string; // JIRA-style prefix, unique across projects — "TME" in TME-42 (lib/keys.ts)
+  key_seq: number; // the counter tasks AND features draw their number from; never decremented
   recap: string; // last LLM "where you left off" recap (auto-generated when idle)
   recap_at: number; // when the recap was generated (0 = none)
   recap_covers_at: number; // the project's last-activity ts the recap was based on
@@ -50,6 +52,7 @@ export interface Feature {
   // and the feature is sitting on the user's review — its terminal state.
   pr_url: string;
   archived: number; // 1 = hidden from the working set, restorable (mirrors projects.deprecated)
+  seq: number; // this feature's number from projects.key_seq (0 = never allocated)
   position: number; // manual order within the project (ascending)
   created_at: number;
   updated_at: number;
@@ -59,8 +62,11 @@ export interface Feature {
 // members are excluded from `total` — they're proposals, not committed work, so
 // a freshly planned feature reads "0/0 · +12 suggested" rather than "0/12".
 export interface FeatureWithCounts extends Feature {
+  key: string; // the rendered "TME-42", derived from the project's key + seq
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'
+  merged_count: number; // of `total`, those whose branch has landed
+  running_count: number; // members with a turn streaming right now
   suggested_count: number; // members still in the suggested tray
   awaiting_count: number; // members waiting on the user right now
   blocked_count: number; // members autopilot escalated and stopped working
@@ -94,6 +100,7 @@ export interface Task {
   gate_attempts: number; // consumed autopilot gate retries (reset by any human message)
   blocked_reason: string; // why autopilot stopped working this task ("" = not blocked)
   generation: number; // increments on each /clear
+  seq: number; // this task's number from projects.key_seq (0 = never allocated)
   position: number; // manual order within the project (list groups + board columns, ascending)
   started: number; // 1 once the initial prompt has been sent
   running: number; // 1 while a Claude turn is actively streaming

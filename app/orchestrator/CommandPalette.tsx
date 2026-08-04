@@ -99,7 +99,9 @@ export function CommandPalette({ projects, commands, onPickProject, onPickTask, 
     };
     const groups: { title: string; entries: Entry[] }[] = [
       { title: "Projects", entries: rank(projects, (p) => `${p.name} ${p.sub}`, limits.project).map((project) => ({ kind: "project", project })) },
-      { title: "Sessions", entries: rank(tasks, (t) => `${t.title} ${t.project_name}`, limits.task).map((task) => ({ kind: "task", task })) },
+      // The key is part of the match text, so pasting "TME-42" straight into the
+      // palette opens it — the point of having a key you can share.
+      { title: "Sessions", entries: rank(tasks, (t) => `${t.key} ${t.title} ${t.project_name}`, limits.task).map((task) => ({ kind: "task", task })) },
       { title: "Commands", entries: rank(commands, (c) => `${c.label} ${c.keywords ?? ""}`, commands.length).map((command) => ({ kind: "command", command })) },
     ];
     // Flatten in display order so ↑/↓ walk straight through the groups.
@@ -167,6 +169,7 @@ export function CommandPalette({ projects, commands, onPickProject, onPickTask, 
             {(t.project_icon || t.project_name[0] || "?").toUpperCase()}
           </span>
           <StatusDot status={t.status} running={t.running === 1} awaiting={t.awaiting_input === 1 && t.running !== 1} />
+          {t.key && <span className="key-chip">{t.key}</span>}
           <span className="pr-title">{t.title}</span>
           <span className="pr-sub">{t.project_name}</span>
           {idx === active && <span className="pr-hint">⏎ open</span>}

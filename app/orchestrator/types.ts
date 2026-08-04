@@ -6,6 +6,7 @@ import type { Priority, Status } from "@/lib/types";
 export interface ProjectRow {
   id: string;
   name: string;
+  key: string; // JIRA-style prefix — the "TME" every task and feature key starts with
   icon: string;
   sub: string;
   color: string;
@@ -29,6 +30,7 @@ export interface ProjectRow {
 export interface FeatureRow {
   id: string;
   project_id: string;
+  key: string; // "TME-7" — derived server-side from the project's key + seq
   name: string;
   description: string;
   context: string; // prepended to member tasks' sessions, after project context
@@ -42,6 +44,8 @@ export interface FeatureRow {
   position: number;
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'
+  merged_count: number; // of `total`, those whose branch has landed (drives "shipped")
+  running_count: number; // members with a turn streaming right now
   suggested_count: number; // members still in the suggested tray
   awaiting_count: number; // members waiting on the user right now
   blocked_count: number; // members autopilot escalated and stopped working
@@ -50,6 +54,7 @@ export interface TaskRow {
   id: string;
   project_id: string;
   feature_id: string | null; // optional grouping; null = ungrouped
+  key: string; // "TME-42" — derived server-side from the project's key + seq
   title: string;
   description: string;
   priority: Priority;
@@ -95,6 +100,7 @@ export interface PaletteTaskRow {
   id: string;
   project_id: string;
   title: string;
+  key: string; // "TME-42" — also part of the palette's fuzzy match text
   status: Status;
   running: number;
   awaiting_input: number;

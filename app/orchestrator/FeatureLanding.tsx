@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { jget, jsend } from "./api";
-import { isAwaiting, relTime } from "./format";
+import { isAwaiting, relTime, featureState, FEATURE_STATE_LABEL } from "./format";
 import { ErrNote, LoadNote, StatusDot } from "./shared";
 import { clientFeatures } from "@/lib/features";
 import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type TaskRow } from "./types";
@@ -53,6 +53,7 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
   };
 
   const pct = feature.total > 0 ? Math.round((feature.done / feature.total) * 100) : 0;
+  const state = featureState(feature);
 
   return (
     <div className="transcript">
@@ -67,6 +68,11 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
             <span className="feat-badge" style={feature.color ? { borderColor: feature.color, color: feature.color } : undefined}>
               {Icon.flag()} Feature
             </span>
+            {feature.key && (
+              <button className="key-chip key-copy" onClick={() => void navigator.clipboard?.writeText(feature.key)} title={`Copy ${feature.key}`}>
+                {feature.key}
+              </button>
+            )}
             {editing ? (
               <input className="inp feat-name-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Feature name" />
             ) : (
@@ -92,6 +98,13 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
           <div className="feat-stats">
             <span className="feat-bar" aria-hidden><span style={{ width: `${pct}%` }} /></span>
             <span className="feat-ratio">{feature.done}/{feature.total} done</span>
+            {/* The same badge the tile carries, so the page and the task list
+                can never disagree about whether this thing shipped. */}
+            {FEATURE_STATE_LABEL[state] && (
+              <span className={`fgh-state s-${state}`}>
+                {state === "shipped" && Icon.check()}{FEATURE_STATE_LABEL[state]}
+              </span>
+            )}
             {feature.suggested_count > 0 && <span className="feat-stat sug">+{feature.suggested_count} suggested</span>}
             {feature.awaiting_count > 0 && <span className="feat-stat await">{feature.awaiting_count} waiting on you</span>}
           </div>
@@ -143,6 +156,7 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
                   <button key={t.id} className="feat-task" onClick={() => onSelectTask(t.id)}>
                     <div className="ft-row">
                       <StatusDot status={t.status} awaiting={isAwaiting(t)} />
+                      {t.key && <span className="key-chip">{t.key}</span>}
                       <span className="ft-title">{t.title}</span>
                       {t.suggested === 1 && <span className="ft-sug">suggested</span>}
                       <span className="ft-status">{isAwaiting(t) ? "Needs you" : SLABEL[t.status]}</span>

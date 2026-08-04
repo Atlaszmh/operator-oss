@@ -204,7 +204,7 @@ export default function Orchestrator() {
       project={project} agents={o.agents} features={o.features} tasks={o.realTasks} suggested={o.suggested} selTaskId={selTask} running={o.running} blockedBy={o.blockedBy}
       loading={o.tasksLoading}
       view={o.taskView} onSetView={setTaskView} onMoveTask={o.moveTask}
-      onSelectTask={o.setSelTask} onSelectFeature={o.selectFeature} onNewTask={() => o.setModal("task")} onNewFeature={() => o.setModal("feature")} onEditContext={() => o.setModal("context")}
+      onSelectTask={o.setSelTask} onSelectFeature={o.selectFeature} onSetFeatureArchived={(id, archived) => void o.saveFeature(id, { archived })} onNewTask={() => o.setModal("task")} onNewFeature={() => o.setModal("feature")} onEditContext={() => o.setModal("context")}
       onShowSessions={() => o.setModal("sessions")} onShowRecap={() => { o.setSelTask(null); o.selectFeature(null); }} onEditTask={o.setEditId}
       onStartSuggestion={o.startSuggestion} onAcceptSuggestion={o.acceptSuggestion} onDismissSuggestion={o.dismissSuggestion}
     />

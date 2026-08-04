@@ -1556,10 +1556,14 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 .feat-group-h .fgh-title{
   font-size:12px;font-weight:700;letter-spacing:-.01em;color:var(--ink);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  /* Takes the free space, and shrinks 8× slower than the branch chip beside it:
+     in a narrow column the branch truncates away first, because the name is the
+     thing you're actually scanning for. */
+  flex:1 1 auto;min-width:0;
 }
 .feat-group-h .fgh-name:hover .fgh-title{color:var(--accent-ink);}
 .feat-group-h .fgh-branch{
-  display:inline-flex;align-items:center;gap:3px;flex:0 1 auto;min-width:0;
+  display:inline-flex;align-items:center;gap:3px;flex:0 8 auto;min-width:0;
   font-family:var(--mono);font-size:9px;color:var(--ink-4);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
@@ -1576,6 +1580,49 @@ button.tpeek-more:hover{color:var(--accent-ink);}
 /* Progress hairline along the bottom edge — readable at a glance, no height cost. */
 .feat-group-h .fgh-bar{position:absolute;left:0;right:0;bottom:-1px;height:2px;overflow:hidden;border-radius:0 0 var(--r) var(--r);}
 .feat-group-h .fgh-bar > span{display:block;height:100%;background:var(--feat-accent);transition:width .25s;}
+/* Archive / restore — quiet until you're over the header, so it doesn't compete
+   with the progress read, but always present on an archived one (where it's the
+   only way back). */
+.feat-group-h .fgh-arch{
+  flex:0 0 auto;width:20px;height:20px;display:grid;place-items:center;
+  background:none;border:0;color:var(--ink-4);cursor:pointer;border-radius:5px;
+  opacity:0;transition:opacity .12s,background .12s;
+}
+.feat-group-h .fgh-arch svg{width:12px;height:12px;}
+.feat-group-h:hover .fgh-arch,.feat-group-h .fgh-arch:focus-visible{opacity:1;}
+.feat-group-h .fgh-arch:hover{background:var(--line);color:var(--ink-2);}
+.feat-group-h[data-archived="1"] .fgh-arch{opacity:1;}
+
+/* --- how far along a feature is (featureState in app/orchestrator/format.ts) --- */
+.fgh-state{
+  display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:1px 6px;border-radius:99px;white-space:nowrap;
+}
+.fgh-state svg{width:10px;height:10px;}
+.fgh-state.s-shipped{background:var(--green-soft);color:var(--green);}
+.fgh-state.s-in_review{background:rgba(245,166,35,.13);color:var(--amber);}
+.fgh-state.s-done{background:var(--line);color:var(--ink-3);}
+/* A shipped feature is history: it recedes rather than competing with live work,
+   and its hairline goes green so "landed" reads without the pill. */
+.feat-group-h[data-state="shipped"]{opacity:.72;}
+.feat-group-h[data-state="shipped"]:hover{opacity:1;}
+.feat-group-h[data-state="shipped"] .fgh-bar > span{background:var(--green);}
+.feat-group-h[data-state="shipped"] .fgh-title{color:var(--ink-3);font-weight:600;}
+
+/* --- JIRA-style key chips (lib/keys.ts) --- */
+.key-chip{
+  flex:0 0 auto;font-family:var(--mono);font-size:9px;font-weight:700;
+  letter-spacing:.02em;color:var(--ink-4);white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+/* Where the key isn't already inside a clickable row, it copies itself — that's
+   the whole point of having one worth sharing. */
+button.key-copy{
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:5px;
+  padding:1px 5px;cursor:pointer;
+}
+button.key-copy:hover{color:var(--ink-2);border-color:var(--line);}
 
 /* --- suggested tray, sub-grouped by feature --- */
 .sug-feat-h{
