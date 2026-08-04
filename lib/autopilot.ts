@@ -31,8 +31,8 @@ import {
   readyMembers,
 } from "./store";
 import { startInitialTurn, startResumeTurn } from "./runner";
-import { runGate, gateIsAdvisory } from "./gates";
-import { mergeTask, fastForwardWorktree } from "./git";
+import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn } from "./gates";
+import { mergeTask, fastForwardWorktree, worktreeSyncStatus } from "./git";
 import { createBranchPr, buildFeaturePrBody } from "./github";
 import { buildConflictPrompt } from "./agents/shared";
 import { subscribeGlobal, publishGlobal, publish } from "./events";
@@ -239,13 +239,46 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   }
 
   // Catch up to the branch's current tip first, so the merge is a fast-forward
-  // wherever it can be. If the base moves again during this, the merge still
-  // proceeds — CI on the feature PR is the arbiter of the COMBINED state, which
-  // is what CI is for. Re-gating on every base movement would serialize exactly
-  // the fan-out the concurrency cap exists to allow.
-  // ponytail: no re-gate after a base move; a semantic conflict between two
-  // independently-green tasks surfaces at the PR, not at the merge.
+  // wherever it can be.
+  //
+  // If the base MOVED since this task was gated, re-run the tests against the
+  // caught-up tree before landing. Only the tests: the diff didn't change, the
+  // ground under it did, so the reviewer has nothing new to read and the
+  // expensive half is the half that can actually catch this. A no-op when the
+  // base held still, and free even when it moved back to a tree already tested
+  // — runTestsIn memoises on the tree sha.
+  //
+  // This is the "surfaces at the PR, not at the merge" bet, called in. Two
+  // independently-green tasks CAN assemble into a red branch with no git
+  // conflict anywhere, and when nothing runs CI on the far side, "the PR will
+  // catch it" means nothing catches it.
+  const preSync = await worktreeSyncStatus({
+    repoPath: project.repo_path,
+    worktreePath: task.worktree_path,
+    workBranch: task.work_branch,
+    baseBranch: base,
+  }).catch(() => null);
   await fastForwardWorktree(task.worktree_path, base);
+
+  if (preSync && preSync.behind > 0) {
+    const retest = await runTestsIn(project, task.worktree_path);
+    if (retest.ran && !retest.ok) {
+      const attempts = task.gate_attempts + 1;
+      if (attempts > AUTOPILOT_ATTEMPTS) {
+        block(task, `\`${project.test_command}\` broke once ${base} moved underneath this task, and it was not fixed in ${AUTOPILOT_ATTEMPTS} attempts.\n\n\`\`\`\n${retest.output}\n\`\`\``);
+        return;
+      }
+      updateTask(task.id, { gate_attempts: attempts });
+      await sendTurn(
+        project,
+        task,
+        `\`${base}\` moved while this task was waiting, and \`${project.test_command}\` now fails against the ` +
+          `caught-up tree. Your own changes were green before the move, so look at what landed on ${base} ` +
+          `and reconcile — do not weaken or skip the failing test.\n\n\`\`\`\n${retest.output}\n\`\`\``
+      );
+      return;
+    }
+  }
 
   const result = await mergeTask({
     repoPath: project.repo_path,
@@ -303,6 +336,17 @@ async function maybeOpenPr(project: Project, feature: Feature): Promise<void> {
     (t) => !t.suggested && t.status !== "done" && t.status !== "cancelled"
   );
   if (outstanding.length) return;
+
+  // Every member passed its own gate in its own worktree. That says nothing
+  // about the branch they were all merged into, and a green-in-isolation set
+  // CAN assemble into a red branch with no git conflict to warn anyone. Prove
+  // the integration branch runs before handing it over as finished work.
+  const gate = await runFeatureGate(project, feature);
+  if (!gate.ok) {
+    const last = members[members.length - 1];
+    if (last) block(last, featureGateFailure(feature, project, gate));
+    return;
+  }
 
   const res = await createBranchPr({
     cwd: project.repo_path,

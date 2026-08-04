@@ -102,10 +102,33 @@ export const AUTOPILOT_CONCURRENCY = process.env.ORCH_AUTOPILOT_CONCURRENCY
  * that hasn't fixed it in two rounds is usually missing context only the user
  * has, and further rounds just spend quota. Expect to tune this — the right
  * number is empirical, which is exactly why it's an env var.
+ *
+ * Raised from 2 to 3 on evidence: a full round is review → fix → re-review, and
+ * at 2 a task that took one round to understand the feedback had no round left
+ * to act on it. Three is still bounded and still cheap next to a human picking
+ * the work back up cold.
  */
 export const AUTOPILOT_ATTEMPTS = process.env.ORCH_AUTOPILOT_ATTEMPTS
   ? Number(process.env.ORCH_AUTOPILOT_ATTEMPTS)
-  : 2;
+  : 3;
+
+/**
+ * Age at which a MERGED task's worktree is pruned automatically, in ms.
+ *
+ * Worktrees are only ever removed when someone opens the maintenance panel and
+ * picks them, so they accumulate silently — one instance had 60 stranded
+ * checkouts for 76 tasks, every one of them merged. Disk is the small cost; the
+ * real one is that `git branch` and `git worktree list` stop being readable, and
+ * a human debugging a merge has to scroll past sixty dead entries to find the
+ * two that matter.
+ *
+ * Only touches worktrees the maintenance route already considers safe (merged,
+ * clean, nothing unmerged — see worktreePruneSafety), and keeps the branch, so
+ * the task stays reopenable and its diff base survives. 0 disables.
+ */
+export const WORKTREE_PRUNE_AFTER_MS = process.env.ORCH_WORKTREE_PRUNE_AFTER_MS
+  ? Number(process.env.ORCH_WORKTREE_PRUNE_AFTER_MS)
+  : 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Hard timeout for an autopilot gate's test run, in ms. A hung suite must not

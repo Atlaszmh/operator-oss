@@ -17,10 +17,23 @@ vi.mock("@/lib/agents/claude/driver", () => ({
   },
 }));
 
-const { gateMock, advisoryMock } = vi.hoisted(() => ({ gateMock: vi.fn(), advisoryMock: vi.fn() }));
+const { gateMock, advisoryMock, featureGateMock, testsMock } = vi.hoisted(() => ({
+  gateMock: vi.fn(),
+  advisoryMock: vi.fn(),
+  featureGateMock: vi.fn(),
+  testsMock: vi.fn(),
+}));
 vi.mock("@/lib/gates", () => ({
   runGate: (...a: unknown[]) => gateMock(...a),
   gateIsAdvisory: () => advisoryMock(),
+  runFeatureGate: (...a: unknown[]) => featureGateMock(...a),
+  runTestsIn: (...a: unknown[]) => testsMock(...a),
+  // Not mocked — it's pure string assembly and the message is what the
+  // assertions read.
+  featureGateFailure: (feature: { branch: string }, project: { test_command: string }, r: { output: string; inconclusive?: boolean }) =>
+    r.inconclusive
+      ? `The feature gate could not run: ${r.output}`
+      : `\`${project.test_command}\` fails on ${feature.branch}, so this feature was not shipped.\n\n${r.output}`,
 }));
 
 // `gh` isn't reachable from the suite, and the PR is the one step that genuinely
@@ -53,6 +66,10 @@ beforeEach(() => {
   gateMock.mockResolvedValue({ ok: true, feedback: "", testsRan: true, reviewRan: true });
   advisoryMock.mockReset();
   advisoryMock.mockReturnValue(false);
+  featureGateMock.mockReset();
+  featureGateMock.mockResolvedValue({ ok: true, ran: true, output: "" });
+  testsMock.mockReset();
+  testsMock.mockResolvedValue({ ran: true, ok: true, output: "" });
   prMock.mockReset();
   prMock.mockResolvedValue({ ok: true, url: "https://example/pull/7" });
   runTurnMock.mockReset();
@@ -243,6 +260,38 @@ describe("autopilot scheduler", () => {
     // The feature must not have been called finished while that task was in flight.
     expect(prMock).not.toHaveBeenCalled();
   });
+
+  // Each member passed its own gate in its own worktree, which proves nothing
+  // about the branch they were all merged into. A green-in-isolation set CAN
+  // assemble into a red branch with no git conflict anywhere to warn anyone —
+  // that is exactly how a feature shipped and broke cross-platform determinism.
+  it("refuses to open the PR when the assembled feature branch fails its tests", async () => {
+    const { project, feature, tasks } = await planFixture(2);
+    featureGateMock.mockResolvedValue({ ok: false, ran: true, output: "determinism BROKEN" });
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(featureGateMock).toHaveBeenCalled(), { timeout: 20_000 });
+    // Members still landed on the integration branch — the branch is the unit
+    // that is refused, not each task's work.
+    await vi.waitFor(() => expect(tasks.every((t) => getTask(t.id)!.status === "done")).toBe(true), { timeout: 20_000 });
+
+    expect(prMock).not.toHaveBeenCalled();
+    expect(getFeature(feature.id)!.pr_url).toBe("");
+    // The refusal reaches the user rather than a log.
+    const blocked = tasks.map((t) => getTask(t.id)!).filter((t) => t.blocked_reason);
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].blocked_reason).toContain("determinism BROKEN");
+  }, 40_000);
+
+  it("opens the PR once the feature branch is green", async () => {
+    const { project, feature } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getFeature(feature.id)!.pr_url).toBe("https://example/pull/7"), { timeout: 20_000 });
+    expect(featureGateMock).toHaveBeenCalled();
+  }, 40_000);
 
   it("in shadow mode it gates but never merges", async () => {
     advisoryMock.mockReturnValue(true);

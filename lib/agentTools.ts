@@ -11,7 +11,7 @@
 
 import { nanoid } from "nanoid";
 import type { Project, Task, Feature, ServiceInfo, Priority, AskQuestion, ToolData } from "./types";
-import { createTask, setTaskDeps, addMessage, updateMessage, updateTask, createFeature, findFeature, updateFeature } from "./store";
+import { createTask, setTaskDeps, addMessage, updateMessage, updateTask, createFeature, findFeature, updateFeature, getFeature, listTasks } from "./store";
 import { getCapabilities } from "./agents/capabilities";
 import { exposeService } from "./services";
 import { publish } from "./events";
@@ -41,6 +41,47 @@ export interface SuggestTaskInput {
   reasoning?: string;
   /** Feature name or id. Resolved within the project; unknown names auto-create. */
   feature?: string;
+  /**
+   * The feature of the task whose session is making this call, used only when
+   * the agent named no feature of its own. See resolveFeature.
+   */
+  inheritFeatureId?: string | null;
+}
+
+/**
+ * Normalised form for comparing two task titles: lowercase, alphanumerics only.
+ * Crude on purpose — it is a warning, not a gate, and the failure it exists to
+ * catch is two agents filing the same work in near-identical words.
+ */
+function titleKey(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Warn when a suggestion duplicates work already in flight.
+ *
+ * Two tasks were once filed with the same brief ("price a bumper hit above a
+ * plain peg hit"), both built to completion by different sessions, and both
+ * arrived at the merge queue with the same core change and incompatible
+ * everything-else. Nothing in the system had noticed, because nothing was
+ * looking — git only sees conflicts once both diffs exist, and by then both
+ * agents have spent their turns.
+ *
+ * A note, never a refusal: the planner is often right that similar-sounding work
+ * is genuinely separate, and blocking a legitimate plan is worse than a line of
+ * text it can ignore.
+ */
+function duplicateNote(projectId: string, title: string): string {
+  const key = titleKey(title);
+  if (key.length < 12) return ""; // too short to be a meaningful match
+  const clash = listTasks(projectId).find(
+    (t) => t.status !== "done" && t.status !== "cancelled" && titleKey(t.title) === key
+  );
+  if (!clash) return "";
+  return (
+    ` NOTE: "${clash.title}" (id: ${clash.id}, status: ${clash.status}) is already open with the same title. ` +
+    `If this is the same work, cancel one of them rather than building it twice.`
+  );
 }
 
 /**
@@ -56,9 +97,28 @@ export interface SuggestTaskInput {
  * agent receives — a planner told "that created a new empty feature" can pass
  * real context on its next call instead of repeating the omission.
  */
-function resolveFeature(projectId: string, ref: string | undefined): { id: string | null; note: string } {
+function resolveFeature(
+  projectId: string,
+  ref: string | undefined,
+  inheritFeatureId?: string | null
+): { id: string | null; note: string } {
   const key = ref?.trim();
-  if (!key) return { id: null, note: "" };
+  // No feature named: inherit the CALLING task's, when it has one. Follow-up
+  // work discovered while building a feature belongs to that feature far more
+  // often than it belongs nowhere — and "nowhere" is not a neutral default,
+  // because autopilot only ever walks feature members (lib/autopilot.ts
+  // sweepOnce → driveFeature → featureMembers). A task filed loose is a task
+  // nothing will ever pick up, which is how a blocker sat untouched in the tray
+  // while the work it blocked waited on it.
+  if (!key) {
+    if (!inheritFeatureId) return { id: null, note: "" };
+    const inherited = getFeature(inheritFeatureId);
+    if (!inherited) return { id: null, note: "" };
+    return {
+      id: inherited.id,
+      note: ` Filed under "${inherited.name}" (inherited from the task that suggested it — pass feature explicitly to file it elsewhere).`,
+    };
+  }
   const existing = findFeature(projectId, key);
   if (existing) return { id: existing.id, note: ` Filed under "${existing.name}".` };
   const created = createFeature({ project_id: projectId, name: key });
@@ -154,7 +214,8 @@ export function createSuggestedTask(project: Project, input: SuggestTaskInput): 
   // The task's agent is projects.default_agent (suggest_task never sets one, so
   // createTask falls back to it) — validate against that agent's descriptor.
   const run = validateRun(project.default_agent, input);
-  const feature = resolveFeature(project.id, input.feature);
+  const feature = resolveFeature(project.id, input.feature, input.inheritFeatureId);
+  const dupe = duplicateNote(project.id, input.title);
   const task = createTask({
     project_id: project.id,
     title: input.title,
@@ -176,7 +237,7 @@ export function createSuggestedTask(project: Project, input: SuggestTaskInput): 
   }
   return {
     task,
-    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${feature.note}${depNote}${run.note}`,
+    text: `Suggested task "${input.title}" added to the project tray (id: ${task.id}).${feature.note}${depNote}${run.note}${dupe}`,
   };
 }
 

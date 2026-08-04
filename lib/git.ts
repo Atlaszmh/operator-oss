@@ -59,6 +59,51 @@ async function hasCommit(repoPath: string): Promise<boolean> {
 
 export const branchForTask = (taskId: string) => `orch/${taskId}`;
 
+/**
+ * A cache key standing for "the exact content of this working tree", or "" when
+ * there isn't a stable one.
+ *
+ * Returns the HEAD sha ONLY for a clean tree. Uncommitted edits are not captured
+ * by a commit sha, so a dirty worktree must never share a cache entry with the
+ * commit it happens to sit on — that would serve a stale pass for code the agent
+ * has since changed. Dirty means "no key", which callers read as "don't cache".
+ */
+export async function cleanTreeSha(worktreePath: string): Promise<string> {
+  if (!worktreePath) return "";
+  try {
+    if ((await git(worktreePath, ["status", "--porcelain"])).trim()) return "";
+    return await git(worktreePath, ["rev-parse", "HEAD"]);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Check `ref` out into a throwaway worktree, hand it to `fn`, then remove it —
+ * the same pattern mergeIntoTargetWorktree uses, exposed for callers that need
+ * to RUN something against a branch (the feature gate runs the project's test
+ * command against an integration branch nobody has checked out).
+ *
+ * The directory is removed whether `fn` throws or not; a leftover from a prior
+ * crash is cleared before reuse rather than blocking forever.
+ */
+export async function withTempWorktree<T>(
+  repoPath: string,
+  ref: string,
+  label: string,
+  fn: (dir: string) => Promise<T>
+): Promise<T> {
+  const dir = path.join(WORKTREES_DIR, `.tmp-${label.replace(/[^A-Za-z0-9._-]/g, "_")}`);
+  fs.mkdirSync(WORKTREES_DIR, { recursive: true });
+  await removeMergeWorktree(repoPath, dir);
+  await git(repoPath, ["worktree", "add", "--detach", dir, ref]);
+  try {
+    return await fn(dir);
+  } finally {
+    await removeMergeWorktree(repoPath, dir);
+  }
+}
+
 // Commit whatever is currently in the repo as the project baseline. Writes a
 // sensible default .gitignore first (so a base commit doesn't swallow
 // node_modules), and uses a fallback identity if the user has none configured.
@@ -1147,6 +1192,55 @@ function parseMergeTreeConflicts(out: string): string[] {
     if (tab >= 0) conflicts.add(lines[i].slice(tab + 1));
   }
   return [...conflicts];
+}
+
+export interface BranchCollision {
+  a: string;
+  b: string;
+  files: string[]; // files the two branches disagree about
+}
+
+/**
+ * Which of these branches would conflict with EACH OTHER if they all landed.
+ *
+ * The per-task sync banner answers "does my branch conflict with the BASE",
+ * which is the wrong question while several tasks are in flight. Two branches
+ * can each merge the base cleanly and still be irreconcilable with one another,
+ * and nothing finds that out until the second one tries to merge — by which
+ * point both agents have already spent their turns building it. That is not
+ * hypothetical: two tasks once shipped the same feature twice, with the same
+ * core change and incompatible everything else, and the first anyone knew was a
+ * merge queue that would not drain.
+ *
+ * `merge-tree --write-tree` predicts each pair without materializing a working
+ * tree, so this is safe to run against a live project. Each pair is evaluated
+ * from its own merge-base, so the answer is what the two changes disagree about
+ * rather than drift from the project branch that both would resolve anyway.
+ *
+ * Pairwise, so O(n²) git invocations — the caller caps the branch count.
+ */
+export async function branchCollisions(repoPath: string, branches: string[]): Promise<BranchCollision[]> {
+  const live: string[] = [];
+  for (const b of branches) if (b && (await branchExists(repoPath, b))) live.push(b);
+
+  const pairs: [string, string][] = [];
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) pairs.push([live[i], live[j]]);
+  }
+
+  const results = await mapLimit(pairs, 4, async ([a, b]): Promise<BranchCollision | null> => {
+    try {
+      // No --name-only: parseMergeTreeConflicts reads the `<mode> <object>
+      // <stage>\t<path>` form, and --name-only prints bare paths with no tab,
+      // which parses as zero conflicts however badly the pair actually clashes.
+      await git(repoPath, ["merge-tree", "--write-tree", a, b]);
+      return null; // exit 0 — the pair merges clean
+    } catch (e) {
+      const files = parseMergeTreeConflicts(stdoutOf(e));
+      return files.length ? { a, b, files } : null;
+    }
+  });
+  return results.filter((r): r is BranchCollision => r !== null);
 }
 
 /**

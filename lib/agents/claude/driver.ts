@@ -37,7 +37,14 @@ import {
   verifyTurn,
 } from "../../claude-auth";
 
-function orchestratorServer(project: Project, onSuggest: (title: string) => void, onExpose: (info: { name: string; url: string }) => void) {
+function orchestratorServer(
+  project: Project,
+  /** The feature of the task running this turn — the default home for work it
+   *  suggests without naming one. Null for a task outside any feature. */
+  callerFeatureId: string | null,
+  onSuggest: (title: string) => void,
+  onExpose: (info: { name: string; url: string }) => void
+) {
   // Titles created this session, so `blocked_by` can reference earlier suggestions
   // by title (not just id) — friendlier for the model when planning a roadmap.
   const createdByTitle = new Map<string, string>();
@@ -86,6 +93,10 @@ function orchestratorServer(project: Project, onSuggest: (title: string) => void
             model: args.model,
             reasoning: args.reasoning,
             feature: args.feature,
+            // Follow-up work found mid-feature belongs to that feature unless
+            // the agent says otherwise — a loose task is one autopilot never
+            // walks. Only applies when `feature` was omitted.
+            inheritFeatureId: callerFeatureId,
           });
           createdByTitle.set(args.title, task.id);
           onSuggest(args.title);
@@ -213,6 +224,7 @@ async function* runTurn(
       mcpServers: {
         orchestrator: orchestratorServer(
           project,
+          task.feature_id,
           (t) => suggested.push(t),
           ({ name, url }) => queue.push({ type: "notice", content: `Service "${name}" is live at ${url}` })
         ),

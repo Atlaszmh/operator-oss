@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getProject } from "@/lib/store";
+import { getProject, getTask } from "@/lib/store";
 import { createSuggestedTask } from "@/lib/agentTools";
 import type { Priority } from "@/lib/types";
 
@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   let body: {
     projectId?: string;
+    taskId?: string;
     title?: string;
     description?: string;
     priority?: Priority;
@@ -43,6 +44,10 @@ export async function POST(req: NextRequest) {
     // Resolved (and auto-created) inside createSuggestedTask, so the bridge and
     // the in-process server land on identical behaviour.
     feature: typeof body.feature === "string" ? body.feature : undefined,
+    // The bridge sends the calling task's id (scripts/orch-mcp.mjs). Its feature
+    // is the default when the agent named none — same rule the Claude driver
+    // applies in-process, so both paths file follow-up work the same way.
+    inheritFeatureId: body.taskId ? (getTask(body.taskId)?.feature_id ?? null) : null,
   });
   return NextResponse.json({ ok: true, id: task.id, title: task.title, text });
 }

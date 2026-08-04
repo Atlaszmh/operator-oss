@@ -11,12 +11,53 @@
 // instructions, which lib/autopilot.ts sends into the task as an ordinary turn.
 
 import { spawn } from "node:child_process";
-import { taskDiff } from "./git";
+import { taskDiff, cleanTreeSha, withTempWorktree } from "./git";
 import { reviewTask } from "./agents/oneshots";
 import { buildReviewPrompt, parseVerdict, clip } from "./agents/shared";
 import { resolveFeatures } from "./features";
 import { GATE_TEST_TIMEOUT_MS } from "./config";
 import type { Feature, GateVerdict, Project, Task } from "./types";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __orchTestCache: Map<string, { ok: boolean; output: string }> | undefined;
+}
+
+/**
+ * Results of the project's test command, keyed by the exact tree it ran against.
+ *
+ * The same suite is now asked for several times per task — the done gate, each
+ * retry, the pre-merge re-check when the base moves, and the feature gate — and
+ * on a real project it is the expensive half by a wide margin (a Rust + wasm
+ * gate is minutes). Re-running it against a tree that has not moved one byte
+ * buys nothing.
+ *
+ * Keyed on a CLEAN tree's HEAD sha (see cleanTreeSha): a dirty worktree gets no
+ * key and is always re-run, because a commit sha says nothing about uncommitted
+ * edits. Kept on globalThis so it survives dev HMR, same as lib/events.ts.
+ *
+ * ponytail: in-memory and per-process, so a restart re-runs everything once.
+ * Persist to the DB if cold-start cost ever shows up.
+ */
+const TEST_CACHE_MAX = 64;
+
+function testCache(): Map<string, { ok: boolean; output: string }> {
+  if (!global.__orchTestCache) global.__orchTestCache = new Map();
+  return global.__orchTestCache;
+}
+
+function rememberTestRun(key: string, value: { ok: boolean; output: string }): void {
+  const cache = testCache();
+  cache.delete(key);
+  cache.set(key, value);
+  // Insertion-ordered Map — the first key is the least recently written.
+  while (cache.size > TEST_CACHE_MAX) cache.delete(cache.keys().next().value as string);
+}
+
+/** Drop every cached run for a project whose test command changed under us. */
+export function clearTestCache(): void {
+  testCache().clear();
+}
 
 // Cap on captured test output. The reviewer reads this, and a 200k-line suite
 // log would crowd the diff out of its context window. Kept as a TAIL, not a
@@ -42,14 +83,40 @@ interface TestRun {
  * timeout, not a supervised service, so there's nothing for the supervisor to own.
  */
 async function runTests(project: Project, task: Task): Promise<TestRun> {
-  const cmd = project.test_command?.trim();
-  if (!cmd || !task.worktree_path) return { ran: false, ok: true, output: "" };
+  return runTestsIn(project, task.worktree_path);
+}
 
+/**
+ * The project's test command against an arbitrary checkout, memoised on the
+ * tree it ran against. Shared by the per-task done gate, the pre-merge re-check
+ * and the feature gate, so all three agree on what "the tests pass" means and
+ * none of them pays for a run another already did.
+ */
+export async function runTestsIn(project: Project, dir: string): Promise<TestRun> {
+  const cmd = project.test_command?.trim();
+  if (!cmd || !dir) return { ran: false, ok: true, output: "" };
+
+  const key = await cleanTreeSha(dir).then((sha) => (sha ? `${sha} ${cmd}` : ""));
+  if (key) {
+    const hit = testCache().get(key);
+    if (hit) return { ran: true, ok: hit.ok, output: hit.output };
+  }
+
+  const result = await spawnTests(cmd, dir, project);
+  // Only a run that actually completed is worth remembering — a suite killed by
+  // the timeout says nothing repeatable about the tree.
+  if (key && !/exceeded .* and was killed/.test(result.output)) {
+    rememberTestRun(key, { ok: result.ok, output: result.output });
+  }
+  return result;
+}
+
+function spawnTests(cmd: string, dir: string, project: Project): Promise<TestRun> {
   return new Promise<TestRun>((resolveRun) => {
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(cmd, {
-        cwd: task.worktree_path,
+        cwd: dir,
         shell: true,
         detached: true, // own process group, so the timeout can kill the whole tree
         env: { ...process.env, CI: "1", ...(project.port ? { PORT: String(project.port) } : {}) },
@@ -176,6 +243,61 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
       ? verdict.notes
       : `The review did not pass, so this task was not merged. Address the following, then finish the work:\n\n${verdict.notes}${noTests}`,
   };
+}
+
+export interface FeatureGateResult {
+  ok: boolean;
+  ran: boolean; // false = nothing to prove with (no test command, or no branch)
+  output: string;
+  inconclusive?: boolean; // the gate could not run — a git failure, not a red suite
+}
+
+/**
+ * The done gate for an assembled FEATURE branch.
+ *
+ * Every member is gated in its own worktree against its own base, which proves
+ * each change works in isolation and nothing whatsoever about the members
+ * together. That gap is not theoretical: a feature whose members were each green
+ * merged into the project branch with zero git conflicts and broke the project's
+ * cross-platform determinism check — git had no reason to report anything, and
+ * nothing ran the suite against the assembled result.
+ *
+ * So: run the project's test command against a throwaway checkout of the
+ * integration branch, before the feature ships or opens a PR. Read-only with
+ * respect to every branch involved — the checkout is detached and removed after.
+ *
+ * A git failure comes back `inconclusive` rather than as a red suite: "I could
+ * not check" and "this is broken" are different claims, and only the second one
+ * should read as the feature being at fault.
+ */
+export async function runFeatureGate(project: Project, feature: Feature): Promise<FeatureGateResult> {
+  const cmd = project.test_command?.trim();
+  if (!cmd) return { ok: true, ran: false, output: "" };
+  if (!feature.branch || !project.repo_path) return { ok: true, ran: false, output: "" };
+
+  try {
+    return await withTempWorktree(project.repo_path, feature.branch, `gate-${feature.id}`, async (dir) => {
+      const run = await runTestsIn(project, dir);
+      return { ok: run.ok, ran: run.ran, output: run.output };
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      ran: false,
+      inconclusive: true,
+      output: `could not check out ${feature.branch} to test it: ${(e as Error).message}`,
+    };
+  }
+}
+
+/** The message a failed feature gate should put in front of the user. */
+export function featureGateFailure(feature: Feature, project: Project, result: FeatureGateResult): string {
+  if (result.inconclusive) return `The feature gate could not run: ${result.output}`;
+  return (
+    `\`${project.test_command}\` fails on ${feature.branch}, so this feature was not shipped.\n\n` +
+    `Every task passed in its own worktree — this is the assembled branch failing, which is exactly ` +
+    `what a per-task gate cannot see.\n\n\`\`\`\n${result.output}\n\`\`\``
+  );
 }
 
 /**

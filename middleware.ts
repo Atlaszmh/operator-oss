@@ -25,12 +25,16 @@ const VERSION_PATH = "/api/version";
 const USAGE_PATH = "/api/instance/usage";
 // The boot-time self-ping from server.js that restores persisted services.
 const SERVICES_RESTORE_PATH = "/api/instance/services-restore";
+// The autopilot heartbeat from server.js — the timer that keeps a queue moving
+// with no browser open. Same loopback + service-token shape as the two above.
+const AUTOPILOT_SWEEP_PATH = "/api/instance/autopilot-sweep";
 function isServiceTokenPath(pathname: string): boolean {
   return (
     pathname === HEALTH_PATH ||
     pathname === VERSION_PATH ||
     pathname === USAGE_PATH ||
-    pathname === SERVICES_RESTORE_PATH
+    pathname === SERVICES_RESTORE_PATH ||
+    pathname === AUTOPILOT_SWEEP_PATH
   );
 }
 

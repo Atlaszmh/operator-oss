@@ -92,7 +92,11 @@ const countsAsActivity = (url) => {
     p !== "/api/instance/idle" &&
     p !== "/api/instance/usage" &&
     p !== "/api/version" &&
-    p !== "/api/instance/services-restore"
+    p !== "/api/instance/services-restore" &&
+    // Our own heartbeat. The SWEEP may find real work, and that work marks
+    // itself busy through lib/idle.ts — but the ping itself must not read as
+    // user activity, or the box could never idle down.
+    p !== "/api/instance/autopilot-sweep"
   );
 };
 
@@ -121,6 +125,44 @@ function restorePersistedServices() {
       });
   };
   ping();
+}
+
+// Keep autopilot moving with nobody watching.
+//
+// sweepAutopilot() used to be reachable only from the browser's five-minute
+// recap poll, so a queue resumed after a restart only if someone had a tab
+// open — and an "unattended" plan quietly wasn't. This is the same loopback +
+// service-token self-ping as the boot restore above, on a timer.
+//
+// unref() so the interval never holds the process open by itself, and the ping
+// is fire-and-forget: a sweep that throws is the sweep's problem (it logs), not
+// something that should take the server down. Overlapping ticks are safe —
+// sweep() is serialized per project and re-loops instead of running twice.
+const AUTOPILOT_SWEEP_MS = Number(process.env.ORCH_AUTOPILOT_SWEEP_MS || 60_000);
+function startAutopilotHeartbeat() {
+  if (!(AUTOPILOT_SWEEP_MS > 0)) {
+    console.log("[autopilot] heartbeat disabled (ORCH_AUTOPILOT_SWEEP_MS <= 0)");
+    return;
+  }
+  const url = `http://127.0.0.1:${port}/api/instance/autopilot-sweep`;
+  const headers = process.env.SERVICE_TOKEN ? { "x-service-token": process.env.SERVICE_TOKEN } : {};
+  let warned = false;
+  const tick = () => {
+    fetch(url, { method: "POST", headers })
+      .then((res) => {
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        warned = false;
+      })
+      .catch((err) => {
+        // Warn once per outage, not once per minute.
+        if (!warned) {
+          warned = true;
+          console.warn(`[autopilot] sweep ping failed: ${err?.message || err}`);
+        }
+      });
+  };
+  setTimeout(tick, 5000).unref?.();
+  setInterval(tick, AUTOPILOT_SWEEP_MS).unref?.();
 }
 
 // Forward a WebSocket upgrade on /pty to the node-pty sidecar. The sidecar reads
@@ -237,6 +279,7 @@ Promise.all([app.prepare(), cfAccessImport, serviceRouterImport, envKeysImport])
 
   server.listen(port, hostname, () => {
     restorePersistedServices();
+    startAutopilotHeartbeat();
     const auth = cfAccess.originAuthEnabled()
       ? `origin auth ON — Cloudflare Access (team ${process.env.CF_ACCESS_TEAM_DOMAIN})`
       : "origin auth OFF — set CF_ACCESS_*" +
