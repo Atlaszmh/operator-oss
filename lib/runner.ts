@@ -14,7 +14,7 @@ import { extractOutcome } from "@/lib/agents/shared";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
 import { publish } from "@/lib/events";
-import { worktreeSyncStatus, fastForwardWorktree, ensureWorktree } from "@/lib/git";
+import { worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, ensureWorktree } from "@/lib/git";
 import { track } from "@/lib/analytics";
 import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE, MAX_MESSAGE_CHARS, TOO_LARGE_MESSAGE } from "@/lib/promptLimits";
 import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
@@ -159,8 +159,8 @@ export async function startInitialTurn(task: Task, project: Project, controller?
 }
 
 /**
- * Begin a *resume* (non-initial) turn for a task: silently catch a
- * fast-forward-able worktree up to the base branch, persist + echo the user
+ * Begin a *resume* (non-initial) turn for a task: silently catch a conflict-free
+ * worktree up to the base branch, persist + echo the user
  * message, flip running on, and hand off to the detached runner. Shared by the
  * POST /messages resume path and the queue drainer (a dequeued follow-up is
  * always a resume turn). Mirrors the prep the POST route does inline for the
@@ -183,10 +183,23 @@ export async function startResumeTurn(task: Task, project: Project, userText: st
     return;
   }
   try {
-    // Catch the worktree up to base when it's a clean, zero-conflict fast-forward
-    // (no divergent commits, clean tree) so follow-up work isn't built on stale
-    // code. Anything riskier is left to the user-driven Sync/Fix banner. A git
-    // hiccup must never block the turn — just skip the catch-up.
+    // Catch the worktree up to base whenever git says the result is conflict-free,
+    // so follow-up work isn't built on stale code. Two tiers, both zero-risk:
+    // a fast-forward when there's no divergent work, and an ordinary merge when
+    // there is but `merge-tree` predicts no conflict.
+    //
+    // The second tier is the one that matters. Restricting the catch-up to
+    // fast-forwards meant a task stopped syncing the moment it committed
+    // anything, then drifted one commit further behind for every merge that
+    // landed while it waited on the user — so the conflict it eventually hit was
+    // the size of the whole wait, not the size of the change. Conflicts were
+    // manufactured by queueing, not by the work.
+    //
+    // A dirty tree is still left alone: prepareWorktreeMerge commits pending
+    // edits to get a clean tree, and silently committing an agent's half-finished
+    // work at turn start is not this function's call. That case, and any genuine
+    // conflict, still go to the user-driven Sync/Fix banner. A git hiccup must
+    // never block the turn — just skip the catch-up.
     let syncNote = "";
     if (task.worktree_path && task.work_branch) {
       try {
@@ -200,7 +213,24 @@ export async function startResumeTurn(task: Task, project: Project, userText: st
           workBranch: task.work_branch,
           baseBranch: base,
         });
-        if (s.canFastForward && s.behind > 0 && (await fastForwardWorktree(task.worktree_path, base))) {
+        let caughtUp = false;
+        if (s.behind > 0 && !s.isDirty) {
+          if (s.canFastForward) {
+            caughtUp = await fastForwardWorktree(task.worktree_path, base);
+          } else if (s.clean) {
+            const prep = await prepareWorktreeMerge({
+              repoPath: project.repo_path,
+              worktreePath: task.worktree_path,
+              baseBranch: base,
+              message: `Sync ${base} into ${task.title} (orchestrator task ${task.id})`,
+            });
+            // prep.ok && !prep.clean means merge-tree's prediction was wrong at
+            // the margin and the worktree now holds markers — leave it for the
+            // banner rather than starting a turn on a conflicted tree.
+            caughtUp = prep.ok && prep.clean;
+          }
+        }
+        if (caughtUp) {
           if (s.baseTip) {
             task.base_sha = s.baseTip;
             updateTask(id, { base_sha: s.baseTip });

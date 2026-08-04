@@ -156,6 +156,40 @@ describe("autopilot scheduler", () => {
     expect(launchedIds()).toHaveLength(AUTOPILOT_ATTEMPTS + 1);
   }, 30_000);
 
+  // An unrunnable reviewer (usage limit, no connected utility agent, a died
+  // turn) is a statement about the reviewer, not about the diff. Charging it to
+  // the task burned both retries on an outage and then blocked finished work
+  // behind it — and sent the agent the error string as if it were review
+  // feedback to act on.
+  it("does not charge an inconclusive gate to the task, and lands it once the reviewer is back", async () => {
+    const { project, tasks } = await planFixture(1);
+    gateMock.mockResolvedValue({
+      ok: false,
+      inconclusive: true,
+      feedback: "The review could not run: usage limit reached",
+      testsRan: true,
+      reviewRan: false,
+    });
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+
+    const during = getTask(tasks[0].id)!;
+    expect(during.blocked_reason).toBe("");
+    expect(during.gate_attempts).toBe(0); // full retry budget intact for a real review
+    expect(during.status).not.toBe("done");
+    expect(during.awaiting_input).toBe(1); // still settled, so the next sweep gates it again
+    // The outage was never sent into the task as work to do.
+    expect(launchedIds()).toEqual([tasks[0].id]);
+    expect(runTurnMock.mock.calls.some((c) => /could not run/.test(String(c[2])))).toBe(false);
+
+    gateMock.mockResolvedValue({ ok: true, feedback: "", testsRan: true, reviewRan: true });
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 15_000 });
+    expect(getTask(tasks[0].id)!.merged_at).toBeGreaterThan(0);
+  }, 40_000);
+
   it("keeps working an independent sibling while one member is blocked", async () => {
     const { project, tasks } = await planFixture(2);
     const [bad, good] = tasks;

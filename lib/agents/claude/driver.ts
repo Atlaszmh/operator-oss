@@ -498,7 +498,12 @@ async function reviewTask(prompt: string, cwd: string): Promise<string> {
     options: {
       cwd: cwd || process.cwd(),
       allowedTools: ["Read", "Grep", "Glob"],
-      maxTurns: 12,
+      // Same bound as draftProjectContext, and for the same reason: this is a
+      // repo-EXPLORING loop, not a text-in/text-out one. At 12 a reviewer ran
+      // out of turns part-way through a real multi-file diff and returned an
+      // error instead of a verdict — which the gate could only read as "the
+      // review could not run". The cap is a runaway guard, not a review budget.
+      maxTurns: 40,
       permissionMode: "bypassPermissions",
       pathToClaudeCodeExecutable: CLAUDE_PATH,
     },

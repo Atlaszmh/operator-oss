@@ -149,8 +149,14 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   } catch (e) {
     // No connected utility agent, or the review turn died. Fail closed and say
     // why: an unrunnable reviewer must not become an automatic merge.
+    //
+    // But fail closed INCONCLUSIVE, not FAIL. This is a statement about the
+    // reviewer, not about the diff — usually a usage limit or a dropped turn,
+    // both of which pass on their own. Charging it to the task burned its
+    // retries and blocked finished work behind an outage.
     return {
       ok: false,
+      inconclusive: true,
       testsRan: tests.ran,
       reviewRan: false,
       feedback: `The review could not run: ${(e as Error).message}`,

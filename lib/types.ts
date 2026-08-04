@@ -347,7 +347,13 @@ export interface GateVerdict {
   ok: boolean;
   feedback: string;
   testsRan: boolean; // false = the project has no test_command, so nothing proved it runs
-  reviewRan: boolean; // false = short-circuited by a red suite
+  reviewRan: boolean; // false = short-circuited by a red suite, or the reviewer couldn't run
+  // The gate reached no verdict about the WORK — the reviewer itself failed to
+  // run (no connected agent, usage limit, a died turn). Distinct from a FAIL,
+  // which is a judgement about the diff: an inconclusive gate must never be
+  // charged to the task as a failed attempt, and its message must never be sent
+  // to the agent as if it were review feedback to act on.
+  inconclusive?: boolean;
 }
 
 export const toolData = (ev: Extract<StreamEvent, { type: "tool" }>): ToolData => ({

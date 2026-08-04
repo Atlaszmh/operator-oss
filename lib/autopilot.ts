@@ -189,6 +189,20 @@ function isSettledForGating(t: Task): boolean {
 async function gateAndLand(project: Project, feature: Feature, task: Task): Promise<void> {
   const verdict = await runGate(task, project, feature);
 
+  // The gate reached no verdict about the work — the reviewer itself couldn't
+  // run (usage limit, no connected utility agent, a turn that died). Leave the
+  // task exactly as it is: no attempt charged, no turn sent, still settled, so
+  // the next sweep gates it again once the reviewer is back. Charging an outage
+  // to the task blocked finished work behind it AND sent the agent an error
+  // string as if it were review feedback to act on.
+  // ponytail: no user-visible signal while the reviewer is down — the task just
+  // sits in "needs you" as it already did. Surface a per-task inconclusive count
+  // if outages ever get long enough to be confusing.
+  if (verdict.inconclusive) {
+    console.warn(`[autopilot] gate inconclusive for task ${task.id}, will retry: ${verdict.feedback}`);
+    return;
+  }
+
   if (!verdict.ok) {
     const attempts = task.gate_attempts + 1;
     if (attempts > AUTOPILOT_ATTEMPTS) {
