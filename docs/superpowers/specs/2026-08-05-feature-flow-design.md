@@ -69,7 +69,7 @@ on a branch — from repeated re-applies.
 
 ### Tier 0 — settings only, no code, do first
 
-1. **Point the gate at the project's real check.** Set the project's
+1. **DONE** (2026-08-06, config on the live instance; verified 112s cold / exit 0 in a fresh worktree — the dependency-free crate makes the shared cargo cache unnecessary). **Point the gate at the project's real check.** Set the project's
    `test_command` to the full `npm run check`, and its `setup_command` to
    `cd shell && NODE_ENV=development npm ci --include=dev` so `tsc` exists in
    every worktree. This one change would have caught CH-41's duplicate declare
@@ -90,7 +90,7 @@ on a branch — from repeated re-applies.
    once per ship against the assembled branch) runs the full check. That is the
    right place for the expensive suite anyway — it is the last gate before code
    reaches main, and it runs once per feature rather than once per task.
-3. **Prune.** 28 worktrees and 29 task branches are pure overhead. The
+3. **DONE** (2026-08-06: 28 worktrees pruned, 4.3GB reclaimed, 5 kept for holding unlanded work; 105 stale worktree_path rows cleared). **Prune.** 28 worktrees and 29 task branches are pure overhead. The
    maintenance route already exists.
 
 ### Tier 1 — conflict avoidance (the biggest win)
@@ -113,14 +113,14 @@ on a branch — from repeated re-applies.
    instead of editing one shared `addChild` call. Same for `core/src/lib.rs`
    exports and the `wasm-parity` golden list. Worth one refactor task — it
    removes the collision class rather than managing it.
-6. **Surface the collision at plan time.** When a feature is planned while
+6. **DONE** (2026-08-06, cheap version: measured hotspot list appended to the project context). **Surface the collision at plan time.** When a feature is planned while
    another is active, list the hub files both are likely to touch. Cheap
    version: derive each project's hot-file list from git history and put it in
    the project context, so planners design around it.
 
 ### Tier 2 — conflict resolution in-app
 
-7. **Give features the resolution flow tasks already have.** The upgrade path is
+7. **DONE** (`6400d19`): a conflicted feature files a RESOLUTION TASK (member task cut from the feature branch) — auto-suggested on a conflicted catch-up, adopted unattended by armed autopilot, or started by the page's Resolve-with-AI button. **Give features the resolution flow tasks already have.** The upgrade path is
    already written down in the sync route's own comment: cut a temp worktree on
    the feature branch, run `prepareWorktreeMerge` → AI resolution →
    `completeWorktreeMerge` against it. Everything needed exists; it has simply
@@ -129,11 +129,11 @@ on a branch — from repeated re-applies.
 
 ### Tier 3 — never strand work
 
-8. **Refuse to archive a feature with unmerged commits** (or warn hard). CH-94
+8. **DONE** (`6400d19`, 409 + confirm/force; counts WORK commits, not the sync's own merges). **Refuse to archive a feature with unmerged commits.** CH-94
    is the case this prevents.
-9. **Notice post-ship commits.** If a shipped feature's branch moves ahead of the
+9. **DONE** (`6400d19`, reconcile parks the note on the tile). If a shipped feature's branch moves ahead of the
    project branch again, say so. CH-30 is the case this prevents.
-10. **Make shipped self-healing.** `features.merged_at` drifted from reality on
+10. **DONE** (`6400d19`, reconcile heals merged_at from git reachability, measured --no-merges, TOCTOU-guarded). `features.merged_at` drifted from reality on
     CH-31 and CH-41 — merge on main, `merged_at` still 0, so the UI kept
     offering Ship. Reconcile it from git (branch fully reachable from the project
     branch ⇒ shipped) on the feature page and the recap sweep, rather than
