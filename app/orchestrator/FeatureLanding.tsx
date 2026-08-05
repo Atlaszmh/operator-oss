@@ -413,6 +413,18 @@ function FeatureBranchPanel({ feature, project, onRefresh }: { feature: FeatureR
           <span className="fb-arrow">→</span>
           <code className="fb-name">{project.branch}</code>
         </div>
+        {/* Parked by the automatic catch-up that runs whenever anything lands on
+            the project branch. Stated in full here (the tile only has room for a
+            chip) because this page is where Sync lives. */}
+        {feature.sync_conflict && (
+          <div className="fb-note fb-conflict">
+            {Icon.git()} {feature.sync_conflict}
+            <div className="fb-sub">
+              Resolve it in your own checkout of <code>{feature.branch}</code>, then Sync — every other live
+              feature already caught up, so this is the only branch holding out.
+            </div>
+          </div>
+        )}
         {loading && !info ? (
           <LoadNote>Checking divergence…</LoadNote>
         ) : info ? (

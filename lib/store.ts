@@ -435,9 +435,9 @@ export function updateFeature(id: string, patch: Partial<Omit<Feature, "id" | "p
   const n = { ...cur, ...patch, updated_at: Date.now() };
   getDb()
     .prepare(
-      `UPDATE features SET name=?, description=?, context=?, color=?, branch=?, base_sha=?, merged_at=?, autopilot=?, pr_url=?, archived=?, position=?, updated_at=? WHERE id=?`
+      `UPDATE features SET name=?, description=?, context=?, color=?, branch=?, base_sha=?, merged_at=?, autopilot=?, pr_url=?, archived=?, sync_conflict=?, position=?, updated_at=? WHERE id=?`
     )
-    .run(n.name.trim(), n.description, n.context, n.color, n.branch, n.base_sha, n.merged_at, n.autopilot ?? 0, n.pr_url ?? "", n.archived, n.position, n.updated_at, id);
+    .run(n.name.trim(), n.description, n.context, n.color, n.branch, n.base_sha, n.merged_at, n.autopilot ?? 0, n.pr_url ?? "", n.archived, n.sync_conflict ?? "", n.position, n.updated_at, id);
   return getFeature(id);
 }
 

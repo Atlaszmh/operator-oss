@@ -92,6 +92,13 @@ export function init(db: Database.Database) {
       autopilot   INTEGER NOT NULL DEFAULT 0,
       pr_url      TEXT NOT NULL DEFAULT '',
       archived    INTEGER NOT NULL DEFAULT 0,
+      -- Why the last automatic catch-up of this branch failed ('' = it didn't).
+      -- Every live feature branch merges the project branch in as soon as
+      -- anything lands there (lib/featureSync.ts), so divergence never
+      -- accumulates; when that merge conflicts there is no session to hand it
+      -- to, so the reason is parked here and shown on the feature's tile.
+      -- Cleared by the next sync that succeeds, and by shipping.
+      sync_conflict TEXT NOT NULL DEFAULT '',
       -- This feature's number from projects.key_seq (0 = never allocated).
       seq         INTEGER NOT NULL DEFAULT 0,
       position    INTEGER NOT NULL DEFAULT 0,
@@ -460,6 +467,8 @@ export function migrate(db: Database.Database) {
   add("key_seq", "INTEGER NOT NULL DEFAULT 0");
   if (!taskCols.includes("seq")) db.exec("ALTER TABLE tasks ADD COLUMN seq INTEGER NOT NULL DEFAULT 0");
   if (!featureCols.includes("seq")) db.exec("ALTER TABLE features ADD COLUMN seq INTEGER NOT NULL DEFAULT 0");
+  // Why the last automatic branch catch-up failed (lib/featureSync.ts).
+  if (!featureCols.includes("sync_conflict")) db.exec("ALTER TABLE features ADD COLUMN sync_conflict TEXT NOT NULL DEFAULT ''");
   backfillKeys(db);
   // The optional feature this task belongs to (NULL = ungrouped, which is what
   // every pre-feature task is). SQLite requires a NULL default when adding a

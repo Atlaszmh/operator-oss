@@ -16,6 +16,7 @@
 // sweep() is idempotent and serialized per project, so the two triggers
 // overlapping is harmless.
 
+import { syncFeaturesToBase } from "./featureSync";
 import {
   getProject,
   getFeature,
@@ -323,6 +324,12 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
       additions: result.additions ?? 0,
       deletions: result.deletions ?? 0,
     });
+  // Same rule as the manual merge route: if what just landed was the PROJECT
+  // branch, every other live feature branch catches up now rather than at its
+  // own ship. Unattended work is exactly where silent divergence is worst —
+  // nobody is watching the branches while autopilot walks the plan.
+  if (!result.alreadyMerged && result.targetBranch === project.branch)
+    await syncFeaturesToBase(project, { except: task.feature_id ?? undefined });
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
 }

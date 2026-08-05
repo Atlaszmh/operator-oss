@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFeature, getProject } from "@/lib/store";
+import { getFeature, getProject, updateFeature } from "@/lib/store";
 import { landBranch } from "@/lib/git";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   });
 
   if (!res.ok) {
+    const note = res.conflicts?.length
+      ? `${project.branch} conflicts with ${feature.branch} in ${res.conflicts.length} file(s): ${res.conflicts.join(", ")}`
+      : res.error || `could not merge ${project.branch} into ${feature.branch}`;
+    // Park it in the same place the automatic catch-up does, so the tile tells
+    // the same story whichever path found the conflict.
+    updateFeature(feature.id, { sync_conflict: note });
     return NextResponse.json(
       {
         error: res.conflicts?.length
@@ -42,6 +48,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       { status: 409 }
     );
   }
+  // Succeeded — whatever the last attempt parked is stale now.
+  if (feature.sync_conflict) updateFeature(feature.id, { sync_conflict: "" });
   return NextResponse.json({
     ok: true,
     text: res.alreadyMerged

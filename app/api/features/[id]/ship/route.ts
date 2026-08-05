@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getFeature, getProject, updateFeature, featureUnfinishedTasks } from "@/lib/store";
 import { mergeFeature } from "@/lib/git";
+import { syncFeaturesToBase, summarizeSync } from "@/lib/featureSync";
 import { runFeatureGate, featureGateFailure } from "@/lib/gates";
 
 export const dynamic = "force-dynamic";
@@ -64,14 +65,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // re-shipping must not un-do a deliberate Restore.
   if (!res.alreadyMerged) updateFeature(feature.id, { merged_at: Date.now(), archived: 1 });
 
+  // The project branch just moved, so every other live feature is now behind by
+  // exactly this feature. Catch them up HERE, at the landing, while the conflict
+  // (if any) is one feature wide and the sessions that caused it are still warm.
+  // Left until each feature's own ship, this is the divergence that turns a
+  // one-line reconciliation into a multi-week merge. Never fails the ship: the
+  // merge already succeeded, and another feature's branch is not this one's
+  // problem to report as an error.
+  const synced = res.alreadyMerged ? [] : await syncFeaturesToBase(project, { except: feature.id });
+  const syncNote = summarizeSync(synced);
+
   const tail = unfinished.length
     ? ` ${unfinished.length} task${unfinished.length === 1 ? " is" : "s are"} still unfinished, so only work already merged into ${feature.branch} landed.`
     : "";
   return NextResponse.json({
     ok: true,
     alreadyMerged: !!res.alreadyMerged,
+    synced,
     text: res.alreadyMerged
       ? `${feature.branch} was already merged into ${res.targetBranch}.`
-      : `Shipped ${feature.name}: merged ${feature.branch} into ${res.targetBranch}.${tail}`,
+      : `Shipped ${feature.name}: merged ${feature.branch} into ${res.targetBranch}.${tail}${syncNote ? ` ${syncNote}` : ""}`,
   });
 }

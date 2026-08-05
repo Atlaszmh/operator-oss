@@ -41,6 +41,9 @@ export interface FeatureRow {
   autopilot: number; // 1 = the approved plan is running unattended (lib/autopilot.ts)
   pr_url: string; // the integration branch's open PR ("" = none); set = waiting on your review
   archived: number; // 1 = hidden from the working set (mirrors project.deprecated)
+  // Why the last automatic catch-up of this branch failed ('' = it didn't). Set
+  // whenever something lands on the project branch and this one can't follow.
+  sync_conflict: string;
   position: number;
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'

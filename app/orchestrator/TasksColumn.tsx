@@ -140,6 +140,12 @@ function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen, onSetArchive
           progress against work nobody has accepted. */}
       {feature.suggested_count > 0 && <span className="fgh-sug" title={`${feature.suggested_count} suggested, not yet accepted`}>+{feature.suggested_count}</span>}
       {feature.awaiting_count > 0 && <span className="fgh-await" title={`${feature.awaiting_count} waiting on you`}>{feature.awaiting_count}</span>}
+      {/* This branch stopped being able to follow the project branch. Shown here
+          because the catch-up runs after SOMEONE ELSE's merge — there is no
+          session of this feature's own that would otherwise surface it. */}
+      {feature.sync_conflict && (
+        <span className="fgh-conflict" title={feature.sync_conflict}>{Icon.git()} conflict</span>
+      )}
       <span className="fgh-count" title={`${feature.done} of ${feature.total} done`}>{feature.done}/{feature.total}</span>
       {/* Archive from here rather than only from the feature page: a finished
           feature is exactly the one you don't want to open again. */}

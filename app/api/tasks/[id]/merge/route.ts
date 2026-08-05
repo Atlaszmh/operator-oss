@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTask, getProject, updateTask, recordTaskMerge, taskBaseBranch } from "@/lib/store";
 import { mergeTask } from "@/lib/git";
+import { syncFeaturesToBase } from "@/lib/featureSync";
 import { track } from "@/lib/analytics";
 import { hasTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
@@ -55,6 +56,13 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
           project_id: project.id, task_id: id, agent: task.agent,
           additions: result.additions ?? 0, deletions: result.deletions ?? 0,
         });
+      // A task whose base IS the project branch (ungrouped, or in a feature with
+      // no integration branch) moves that branch just as a ship does — so the
+      // same catch-up applies. Keyed off what actually landed rather than off
+      // the task's shape, so there is one rule and no second place to forget:
+      // if the project branch moved, every live feature branch follows it.
+      if (!result.alreadyMerged && result.targetBranch === project.branch)
+        await syncFeaturesToBase(project);
     }
     return NextResponse.json(result, { status: result.ok ? 200 : 409 });
   }));

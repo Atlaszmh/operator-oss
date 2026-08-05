@@ -52,6 +52,9 @@ export interface Feature {
   // and the feature is sitting on the user's review — its terminal state.
   pr_url: string;
   archived: number; // 1 = hidden from the working set, restorable (mirrors projects.deprecated)
+  // Why the last automatic catch-up of this branch failed ('' = it didn't).
+  // See lib/featureSync.ts; cleared by the next sync that succeeds.
+  sync_conflict: string;
   seq: number; // this feature's number from projects.key_seq (0 = never allocated)
   position: number; // manual order within the project (ascending)
   created_at: number;
