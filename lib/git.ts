@@ -1248,6 +1248,32 @@ export async function branchCollisions(repoPath: string, branches: string[]): Pr
  * when there are no divergent commits and the tree is clean (see `canFastForward`);
  * returns false if git refuses the fast-forward.
  */
+/** A branch's tip sha, or "" when the ref doesn't resolve. */
+export async function branchTip(repoPath: string, ref: string): Promise<string> {
+  return git(repoPath, ["rev-parse", "--verify", `${ref}^{commit}`]).catch(() => "");
+}
+
+/**
+ * How many commits of REAL WORK `workBranch` holds that `baseBranch` doesn't —
+ * `rev-list --count --no-merges`, not the raw ahead count, and the distinction
+ * is load-bearing. The automatic catch-up (lib/featureSync.ts) lands the
+ * project branch on every live feature branch as a merge commit, and that
+ * commit is unreachable from the project branch — so a feature's raw `ahead`
+ * grows by one per landing while its tree gains nothing. Counting merges made
+ * the archive guard cry strand over the orchestrator's own bookkeeping, and
+ * permanently blocked the lost-ship-stamp heal (each landing re-armed
+ * `ahead > 0`, an absorbing state only a manual ship could exit).
+ *
+ * Returns 0 when either ref is missing — callers treat "nothing to measure"
+ * and "nothing unlanded" the same way, and both are safe defaults here.
+ */
+export async function unlandedWorkCount(repoPath: string, workBranch: string, baseBranch: string): Promise<number> {
+  return parseInt(
+    await git(repoPath, ["rev-list", "--count", "--no-merges", `${baseBranch}..${workBranch}`]).catch(() => "0"),
+    10
+  ) || 0;
+}
+
 export async function fastForwardWorktree(worktreePath: string, baseBranch: string): Promise<boolean> {
   try {
     await git(worktreePath, ["merge", "--ff-only", baseBranch]);

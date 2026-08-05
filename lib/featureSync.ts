@@ -1,5 +1,6 @@
-import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge } from "./git";
-import { listFeatures, listTasks, updateFeature, updateTask, taskBaseBranch } from "./store";
+import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount } from "./git";
+import { listFeatures, listTasks, listProjects, createTask, getFeature, updateFeature, updateTask, taskBaseBranch } from "./store";
+import { buildFeatureConflictTaskPrompt } from "./agents/shared";
 import { hasTurn } from "./abort";
 import type { FeatureWithCounts, Project, Task } from "./types";
 
@@ -110,6 +111,10 @@ export async function syncFeaturesToBase(
         ? `${project.branch} conflicts with ${f.branch} in ${conflicts.length} file(s): ${conflicts.join(", ")}`
         : res.error || `could not merge ${project.branch} into ${f.branch}`;
       updateFeature(f.id, { sync_conflict: note });
+      // A real conflict gets more than a note: file the resolution task, so on
+      // an autopilot feature it is adopted and resolved unattended, and on a
+      // manual one it sits in the tray as a one-click Start. Deduped inside.
+      if (conflicts.length) fileConflictResolutionTask(project, f, conflicts);
       results.push({ ...base, ok: false, alreadyMerged: false, conflicts, error: note });
     } catch (e) {
       // A git failure on one feature must not abort the rest of the sweep.
@@ -268,4 +273,131 @@ export async function syncTasksToBase(
     results.push({ taskId: t.id, title: t.title, caughtUp: r.caughtUp, behind: r.behind, conflicts: r.conflicts });
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Conflict RESOLUTION as a task, and branch-truth reconciliation.
+// ---------------------------------------------------------------------------
+
+/** Deterministic title — it doubles as the dedupe key, so one conflict never
+ *  files twice however many landings re-detect it. */
+export const resolutionTaskTitle = (featureBranch: string, baseBranch: string): string =>
+  `Resolve: catch ${featureBranch} up with ${baseBranch}`;
+
+/**
+ * File the task that resolves a feature-level conflict, reusing the ENTIRE
+ * existing machine instead of building a second merge flow: the task is an
+ * ordinary feature member, so its worktree is cut from the feature branch
+ * (taskBaseBranch), its transcript is reviewable, its diff is a diff, and its
+ * merge lands through the same gates as any other work. When it merges, the
+ * feature branch contains the project branch — so the next sync succeeds and
+ * clears the parked note without anyone doing anything else.
+ *
+ * Filed as a SUGGESTION on purpose: an armed autopilot feature auto-adopts
+ * suggested members (driveFeature un-suggests them), so on autopilot the
+ * conflict is resolved unattended; on a manual feature it sits in the tray as
+ * a visible, dismissible, one-click Start — never silent work the user didn't
+ * ask for. The explicit "Resolve with AI" button un-suggests and starts it.
+ */
+export function fileConflictResolutionTask(
+  project: Project,
+  feature: FeatureWithCounts | (Pick<FeatureWithCounts, "id" | "branch"> & { name?: string }),
+  conflicts: string[]
+): { task: Task; existing: boolean } {
+  const title = resolutionTaskTitle(feature.branch, project.branch);
+  const open = listTasks(project.id).find(
+    (t) => t.feature_id === feature.id && t.title === title && t.status !== "done" && t.status !== "cancelled"
+  );
+  if (open) return { task: open, existing: true };
+  const task = createTask({
+    project_id: project.id,
+    feature_id: feature.id,
+    title,
+    description: buildFeatureConflictTaskPrompt(feature.branch, project.branch, conflicts),
+    priority: "hi",
+    suggested: true,
+  });
+  return { task, existing: false };
+}
+
+/**
+ * Reconcile one feature's recorded state with what git actually says about its
+ * branch. Two drifts, both observed in production before this existed:
+ *
+ * - **A lost ship stamp.** The merge commit was on the project branch but
+ *   `merged_at` stayed 0, so the tile kept offering Ship and never archived
+ *   (CH-31, CH-41 — cause never established). Rule: the branch's tip moved off
+ *   its fork point, everything on it is reachable from the project branch, and
+ *   the feature has done members ⇒ it landed; stamp it. The done-members guard
+ *   stops an empty branch someone fast-forwarded from reading "shipped".
+ *
+ * - **Post-ship commits.** Shipping doesn't freeze a branch: a member task can
+ *   merge into it afterwards, and once the feature is archived nobody ever
+ *   looks again (CH-30 gained 5 commits that way). A shipped feature ahead of
+ *   the project branch gets the note parked on its tile; landing the work (or
+ *   the branch catching up any other way) clears it.
+ *
+ * Derived-from-git on purpose, same argument as the feature status rollup: a
+ * stored fact with one writer drifts the first time that writer is bypassed —
+ * and the whole reason this function exists is that it WAS bypassed, somehow.
+ */
+export async function reconcileFeatureBranch(project: Project, f: FeatureWithCounts): Promise<void> {
+  if (!project.repo_path || !f.branch) return;
+  try {
+    const s = await worktreeSyncStatus({ repoPath: project.repo_path, workBranch: f.branch, baseBranch: project.branch });
+    if (!s.baseTip) return; // branch or base missing — the landing-time sync reports that case
+
+    // MEASURED AS WORK, not raw ahead: the auto catch-up leaves merge commits
+    // on every live branch that are unreachable from the project branch, so raw
+    // ahead grows by one per landing while the tree gains nothing. Counting
+    // those made the heal unreachable the moment any landing beat this function
+    // to a lost-stamp feature — an absorbing state (see unlandedWorkCount).
+    const unlanded = await unlandedWorkCount(project.repo_path, f.branch, project.branch);
+
+    if (f.merged_at === 0) {
+      if (!f.base_sha || f.done === 0 || unlanded > 0) return;
+      const tip = await branchTip(project.repo_path, f.branch);
+      if (!tip || tip === f.base_sha) return;
+      // Re-read before stamping: the snapshot may be minutes old (the sweep
+      // ages per-feature while it awaits git), and the branch can be detached /
+      // re-attached concurrently — POST /branch resets merged_at and base_sha,
+      // and a stale stamp merged over that would mark a brand-new branch
+      // "born shipped" with no path back. Only write if the row still
+      // describes exactly what was measured.
+      const cur = getFeature(f.id);
+      if (!cur || cur.merged_at !== 0 || cur.branch !== f.branch || cur.base_sha !== f.base_sha) return;
+      updateFeature(f.id, { merged_at: Date.now(), sync_conflict: "" });
+      return;
+    }
+
+    if (unlanded > 0) {
+      const note =
+        `${unlanded} commit${unlanded === 1 ? "" : "s"} landed on ${f.branch} after it shipped — ` +
+        `open the feature and Ship again to land ${unlanded === 1 ? "it" : "them"} on ${project.branch}.`;
+      const cur = getFeature(f.id);
+      if (cur && cur.merged_at > 0 && cur.branch === f.branch && cur.sync_conflict !== note)
+        updateFeature(f.id, { sync_conflict: note });
+    } else if (f.sync_conflict) {
+      const cur = getFeature(f.id);
+      if (cur && cur.merged_at > 0 && cur.branch === f.branch && cur.sync_conflict)
+        updateFeature(f.id, { sync_conflict: "" });
+    }
+  } catch {
+    // Best effort — reconciliation must never break the surface that asked.
+  }
+}
+
+/**
+ * Every feature of every project, archived ones INCLUDED — CH-30's stranded
+ * commits were on an archived feature, which is precisely why nobody saw them.
+ * Rides the recap sweep's cadence (the same piggyback autopilot's safety sweep
+ * uses, for the same reason: there is no boot hook in a plain-Node server).
+ */
+export async function sweepFeatureHealth(): Promise<void> {
+  for (const p of listProjects()) {
+    if (p.deprecated || !p.repo_path) continue;
+    for (const f of listFeatures(p.id)) {
+      await reconcileFeatureBranch(p, f);
+    }
+  }
 }

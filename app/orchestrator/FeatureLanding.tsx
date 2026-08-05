@@ -12,13 +12,16 @@ import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type 
 // no task is selected. Mirrors ProjectLanding's role one level down: the
 // context that every member task inherits, the progress across them, and the
 // integration branch (when the feature owns one).
-export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTask, onSave, onDelete, onRefresh, onBack }: {
+export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTask, onSave, onArchive, onDelete, onRefresh, onBack }: {
   feature: FeatureRow;
   project: ProjectRow;
   tasks: TaskRow[]; // this feature's members, already filtered by the caller
   onSelectTask: (id: string) => void;
   onNewTask: () => void;
   onSave: (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">>) => Promise<void>;
+  // Archive/restore goes through its own handler, not onSave — the server may
+  // refuse (unmerged commits would strand) and the handler owns that dialog.
+  onArchive: (id: string, archived: number) => void;
   onDelete: (id: string) => Promise<void>;
   onRefresh: () => void; // reload tasks+features after a git action changes them
   // Single-pane phone layout: this page replaces the task list, so it needs its
@@ -137,7 +140,7 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
 
           <AutopilotPanel feature={feature} project={project} tasks={tasks} onRefresh={onRefresh} />
 
-          <FeatureBranchPanel feature={feature} project={project} onRefresh={onRefresh} />
+          <FeatureBranchPanel feature={feature} project={project} onRefresh={onRefresh} onSelectTask={onSelectTask} />
 
           <div className="feat-sect">
             <div className="feat-sect-h">
@@ -175,7 +178,7 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
           <div className="feat-foot">
             <button
               className="btn btn-line btn-sm"
-              onClick={() => onSave(feature.id, { archived: feature.archived ? 0 : 1 })}
+              onClick={() => onArchive(feature.id, feature.archived ? 0 : 1)}
               title={feature.archived ? "Bring this feature back into the working set" : "Hide from the task list; member tasks stay put"}
             >
               {feature.archived ? <>{Icon.restore()} Restore</> : <>{Icon.archive()} Archive</>}
@@ -333,10 +336,10 @@ function AutopilotPanel({ feature, project, tasks, onRefresh }: {
 
 // The opt-in integration branch. With no branch set this is a single offer;
 // with one set it's divergence from the project branch plus Sync and Ship.
-function FeatureBranchPanel({ feature, project, onRefresh }: { feature: FeatureRow; project: ProjectRow; onRefresh: () => void }) {
+function FeatureBranchPanel({ feature, project, onRefresh, onSelectTask }: { feature: FeatureRow; project: ProjectRow; onRefresh: () => void; onSelectTask: (id: string) => void }) {
   const [info, setInfo] = useState<FeatureBranchResp | null>(null);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState<"" | "set" | "clear" | "sync" | "ship">("");
+  const [busy, setBusy] = useState<"" | "set" | "clear" | "sync" | "ship" | "resolve">("");
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -415,14 +418,41 @@ function FeatureBranchPanel({ feature, project, onRefresh }: { feature: FeatureR
         </div>
         {/* Parked by the automatic catch-up that runs whenever anything lands on
             the project branch. Stated in full here (the tile only has room for a
-            chip) because this page is where Sync lives. */}
+            chip) because this page is where the resolution starts: one click
+            files a member task cut from this branch, briefed on the conflict —
+            reviewed and merged like any other work. */}
         {feature.sync_conflict && (
           <div className="fb-note fb-conflict">
             {Icon.git()} {feature.sync_conflict}
-            <div className="fb-sub">
-              Resolve it in your own checkout of <code>{feature.branch}</code>, then Sync — every other live
-              feature already caught up, so this is the only branch holding out.
+            {/* Only for a LIVE feature. On a shipped one this note means
+                post-ship commits stranded on the branch — the remedy is the
+                Ship button right below, and the note says so itself. */}
+            {feature.merged_at === 0 && (
+            <div className="fb-actions" style={{ marginTop: 6 }}>
+              <button
+                className="btn btn-accent btn-sm"
+                disabled={!!busy}
+                title="Start a task on this branch that merges the base in and resolves every conflict — you review its diff before it lands"
+                onClick={async () => {
+                  setBusy("resolve");
+                  setErr(null);
+                  try {
+                    const res = await jsend<{ ok: boolean; taskId: string | null; text?: string }>(`/api/features/${feature.id}/resolve`, "POST");
+                    if (res.text) setNote(res.text);
+                    await load();
+                    onRefresh();
+                    if (res.taskId) onSelectTask(res.taskId);
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setBusy("");
+                  }
+                }}
+              >
+                {Icon.spark()} {busy === "resolve" ? "Starting…" : "Resolve with AI"}
+              </button>
             </div>
+            )}
           </div>
         )}
         {loading && !info ? (

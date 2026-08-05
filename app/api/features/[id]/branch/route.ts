@@ -3,10 +3,12 @@ import {
   getFeature,
   getProject,
   updateFeature,
+  listFeatures,
   featureTasksWithWorktrees,
   featureUnfinishedTasks,
 } from "@/lib/store";
 import { createFeatureBranch, worktreeSyncStatus } from "@/lib/git";
+import { reconcileFeatureBranch } from "@/lib/featureSync";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +33,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const found = await load(id);
   if (!found) return NextResponse.json({ error: "not found" }, { status: 404 });
-  const { feature, project } = found;
+  const { project } = found;
+  let { feature } = found;
+
+  // Reconcile recorded state with git before reporting it: heals a lost ship
+  // stamp and parks/clears the post-ship-commits note (lib/featureSync.ts).
+  // The page opening is exactly when stale state would otherwise mislead.
+  const withCounts = listFeatures(project.id).find((f) => f.id === id);
+  if (withCounts) {
+    await reconcileFeatureBranch(project, withCounts);
+    feature = getFeature(id) ?? feature;
+  }
 
   const base = {
     branch: feature.branch,

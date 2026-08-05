@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getFeature, updateFeature, deleteFeature, findFeature, listFeatures } from "@/lib/store";
+import { getFeature, getProject, updateFeature, deleteFeature, findFeature, listFeatures } from "@/lib/store";
+import { unlandedWorkCount } from "@/lib/git";
 import type { Feature } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,31 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const allowed: Partial<Feature> = {};
   for (const k of ["description", "context", "color", "archived", "position"] as const) {
     if (k in body) (allowed as Record<string, unknown>)[k] = body[k];
+  }
+
+  // Archiving a branch that still holds unlanded commits is how work strands:
+  // the flag hides the feature from every list, and nobody re-reads an archived
+  // branch — one sat with six unmerged commits before this guard existed. Not a
+  // hard wall (the user may know the work is abandoned), so `force` retries it;
+  // the client turns this 409 into a confirm dialog.
+  if (allowed.archived && !cur.archived && cur.branch && body.force !== true) {
+    const project = getProject(cur.project_id);
+    if (project?.repo_path) {
+      // Work commits only (--no-merges): the auto catch-up leaves a merge
+      // commit per landing that raw `ahead` would count, and a guard that cries
+      // strand over the orchestrator's own bookkeeping teaches people to force.
+      const unmerged = await unlandedWorkCount(project.repo_path, cur.branch, project.branch).catch(() => 0);
+      if (unmerged > 0)
+        return NextResponse.json(
+          {
+            error:
+              `${cur.branch} holds ${unmerged} commit${unmerged === 1 ? "" : "s"} that never landed on ` +
+              `${project.branch}. Archiving hides it from every list — that work will strand.`,
+            unmerged,
+          },
+          { status: 409 }
+        );
+    }
   }
   // `autopilot` is accepted here as the PAUSE switch only — any value turns it
   // off. Turning it on is /approve-plan, which also cuts the integration branch

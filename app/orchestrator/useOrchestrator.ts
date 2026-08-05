@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Priority, Status, AskQuestion, AskAnswers } from "@/lib/types";
 import type { ResolveResult } from "../TaskChanges";
-import { jget, jsend } from "./api";
+import { jget, jsend, ApiError } from "./api";
 import { isAwaiting, blockerTitles, formatAnswersText } from "./format";
 import { loadPersist, readUrlSel } from "./persist";
 import { DEFAULT_SETTINGS, EMPTY_AGENTS, type AgentsBundle, type FeatureRow, type OnboardingT, type ProjectRow, type TaskRow } from "./types";
@@ -431,9 +431,32 @@ export function useOrchestrator() {
     setModal(null);
   };
 
-  const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">>) => {
+  const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">> & { force?: boolean }) => {
     const fresh = await jsend<FeatureRow>(`/api/features/${id}`, "PATCH", patch);
     setFeatures((prev) => prev.map((f) => (f.id === id ? { ...f, ...fresh } : f)));
+  };
+
+  // Archive/restore with the strand guard folded in: the server 409s when the
+  // feature's branch holds commits that never landed (archiving would hide
+  // them), and the user decides — the server's own message IS the dialog text,
+  // so the count can't drift from what it actually checked.
+  //
+  // ONLY the 409 offers the force bypass. A network blip or 500 must not open
+  // the "archive anyway?" dialog — the guard never ran, so forcing past it
+  // would strand exactly what it exists to catch. Anything else just logs; the
+  // pre-guard behavior for those failures was an unhandled rejection anyway.
+  const archiveFeature = async (id: string, archived: number) => {
+    try {
+      await saveFeature(id, { archived });
+    } catch (e) {
+      if (archived && e instanceof ApiError && e.status === 409) {
+        if (window.confirm(`${e.message}\n\nArchive it anyway?`)) {
+          await saveFeature(id, { archived, force: true }).catch((err) => console.error("force archive failed:", err));
+        }
+        return;
+      }
+      console.error(`${archived ? "archive" : "restore"} failed:`, e);
+    }
   };
 
   // Deletes the grouping only — member tasks survive, un-grouped (the server's
@@ -681,7 +704,7 @@ export function useOrchestrator() {
     // actions
     // NOTE: the exported setSelTask is the wrapped selector — it closes the
     // feature page. The raw setter stays internal on purpose.
-    setSelTask: selectTask, selectFeature, createFeature, saveFeature, removeFeature, setTaskFeature, refreshTasks,
+    setSelTask: selectTask, selectFeature, createFeature, saveFeature, archiveFeature, removeFeature, setTaskFeature, refreshTasks,
     fetchRecap, runTurn, answerQuestion, stopTurn, cancelQueued, resolveConflictsWithAI,
     selectProject, jumpToNeedsYou, goToTask, clearSession, setStatus, setPriority, setModel,
     setReasoning, setPermission, createTask, saveTask, removeTask, moveTask, startSuggestion, acceptSuggestion,

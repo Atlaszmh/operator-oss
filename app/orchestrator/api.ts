@@ -3,6 +3,15 @@
 // Routes report failures as JSON `{ error }` — unwrap that so surfaced messages
 // read "worktree is dirty", not a raw JSON blob (transcript system errors, modal
 // error notes and ErrNote all show this string verbatim).
+/** Thrown by jget/jsend on a non-2xx — the message is the server's own `error`
+ *  string, and `status` lets a caller react to a SPECIFIC refusal (e.g. the
+ *  archive strand guard's 409) instead of treating every failure alike. */
+export class ApiError extends Error {
+  constructor(msg: string, public readonly status: number) {
+    super(msg);
+  }
+}
+
 async function fail(r: Response): Promise<never> {
   const raw = await r.text();
   let msg = raw || `${r.status} ${r.statusText}`;
@@ -10,7 +19,7 @@ async function fail(r: Response): Promise<never> {
     const j = JSON.parse(raw);
     if (typeof j?.error === "string" && j.error) msg = j.error;
   } catch { /* not JSON — keep the raw body */ }
-  throw new Error(msg);
+  throw new ApiError(msg, r.status);
 }
 
 export async function jget<T>(url: string): Promise<T> {

@@ -243,6 +243,33 @@ export function buildConflictPrompt(baseBranch: string, conflicts: string[]): st
   ].join("\n");
 }
 
+/**
+ * The brief for a feature-conflict RESOLUTION TASK (lib/featureSync.ts).
+ *
+ * Different job from buildConflictPrompt above: that one is sent mid-session to
+ * a task whose merge just failed, so "this branch" already exists and the agent
+ * owns its state. This one is the OPENING brief of a task created for the
+ * purpose — its worktree is cut fresh from the feature branch, no merge has
+ * been attempted in it, so the agent must run the merge itself before there is
+ * anything to resolve. Same no-commit rule, same reason: the merge lands
+ * through review + the normal merge path, not from inside the session.
+ */
+export function buildFeatureConflictTaskPrompt(featureBranch: string, baseBranch: string, conflicts: string[]): string {
+  const files = conflicts.map((f) => `  - ${f}`).join("\n");
+  return [
+    `\`${baseBranch}\` has moved and merging it into this feature's integration branch (\`${featureBranch}\`) hits`,
+    `conflicts. Your worktree is cut from \`${featureBranch}\`, so reconciling it here reconciles the feature.`,
+    ``,
+    `1. Run \`git merge ${baseBranch}\`. It will stop on conflicts in:`,
+    files,
+    `2. Resolve every conflict: remove all markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) and produce a correct`,
+    `   merged result that preserves the intent of BOTH sides — don't blindly pick one. Read the surrounding`,
+    `   code; where the two changes are independent, keep both.`,
+    `3. Do NOT run \`git commit\` or \`git merge --continue\` — leave the files clean and marker-free. The`,
+    `   merge is reviewed and landed through the normal merge flow, not from this session.`,
+  ].join("\n");
+}
+
 // ---------- the autopilot review gate (lib/gates.ts) ----------
 //
 // Marker and parser live together here for the same reason OUTCOME_INSTRUCTION
