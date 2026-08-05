@@ -95,7 +95,7 @@ on a branch — from repeated re-applies.
 
 ### Tier 1 — conflict avoidance (the biggest win)
 
-4. **Sync every active feature when any feature ships.** The moment main moves,
+4. **DONE** (`ff7cfd8`, `lib/featureSync.ts`). **Sync every active feature when any feature ships.** The moment main moves,
    every other live feature branch merges main in. Conflicts then surface within
    minutes of their cause, on a small diff, against work still fresh in a
    session's context — instead of weeks later against a 31-commit branch. The
@@ -104,9 +104,10 @@ on a branch — from repeated re-applies.
    - This alone would have turned CH-98 from a hand-resolved merge into a
      one-line auto-merge, because at the moment CH-103 landed, `scene.ts` had
      one added layer to reconcile, not a whole feature.
-   - When the auto-sync conflicts, do NOT fail silently: raise it the way
-     autopilot raises a stuck task (`blocked_reason` + the "N need you" pill),
-     so it lands in the one queue already watched.
+   - When the auto-sync conflicts, do NOT fail silently. **As built:** parked on
+     `features.sync_conflict` and rendered as a red chip on the feature's tile
+     plus the reason in full on its page. Not `blocked_reason` — that is a task
+     field, and the thing that is stuck here is a branch, not anyone's task.
 5. **Make the hub files stop being hub files.** The deepest fix is in the game,
    not the tool: a layer registry where each feature appends in its own file
    instead of editing one shared `addChild` call. Same for `core/src/lib.rs`
