@@ -1248,6 +1248,32 @@ export async function branchCollisions(repoPath: string, branches: string[]): Pr
  * when there are no divergent commits and the tree is clean (see `canFastForward`);
  * returns false if git refuses the fast-forward.
  */
+/** Does this repo have a remote called `origin`? */
+export async function hasOrigin(repoPath: string): Promise<boolean> {
+  return !!(await git(repoPath, ["remote", "get-url", "origin"]).catch(() => ""));
+}
+
+/**
+ * Push `branch` to origin. Best effort BY DESIGN: shipping is a local git
+ * operation that has already succeeded by the time this runs, so a push that
+ * fails (offline, no remote, credentials expired, non-fast-forward because
+ * someone pushed to the remote meanwhile) must be REPORTED, never thrown — the
+ * merge is not un-done because GitHub was unreachable.
+ *
+ * No `--force` and no lease: a rejected push means the remote holds work this
+ * clone hasn't seen, and resolving that is a fetch-and-merge decision, not
+ * something to paper over while the user is looking away.
+ */
+export async function pushBranch(repoPath: string, branch: string): Promise<{ ok: boolean; error?: string; skipped?: boolean }> {
+  if (!(await hasOrigin(repoPath))) return { ok: false, skipped: true, error: "no `origin` remote configured" };
+  try {
+    await git(repoPath, ["push", "origin", branch]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: msgOf(e) };
+  }
+}
+
 /** A branch's tip sha, or "" when the ref doesn't resolve. */
 export async function branchTip(repoPath: string, ref: string): Promise<string> {
   return git(repoPath, ["rev-parse", "--verify", `${ref}^{commit}`]).catch(() => "");

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getFeature, getProject, updateFeature, featureUnfinishedTasks } from "@/lib/store";
 import { mergeFeature } from "@/lib/git";
-import { syncFeaturesToBase, summarizeSync } from "@/lib/featureSync";
+import { syncFeaturesToBase, summarizeSync, publishProjectBranch } from "@/lib/featureSync";
 import { runFeatureGate, featureGateFailure } from "@/lib/gates";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +74,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // problem to report as an error.
   const synced = res.alreadyMerged ? [] : await syncFeaturesToBase(project, { except: feature.id });
   const syncNote = summarizeSync(synced);
+  // Publish what landed, when the instance is configured to (off by default).
+  // After the local catch-ups: a push that hangs must not delay reconciling the
+  // branches this merge just moved underneath.
+  const published = res.alreadyMerged ? { pushed: false, note: "" } : await publishProjectBranch(project);
 
   const tail = unfinished.length
     ? ` ${unfinished.length} task${unfinished.length === 1 ? " is" : "s are"} still unfinished, so only work already merged into ${feature.branch} landed.`
@@ -82,8 +86,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ok: true,
     alreadyMerged: !!res.alreadyMerged,
     synced,
+    pushed: published.pushed,
     text: res.alreadyMerged
       ? `${feature.branch} was already merged into ${res.targetBranch}.`
-      : `Shipped ${feature.name}: merged ${feature.branch} into ${res.targetBranch}.${tail}${syncNote ? ` ${syncNote}` : ""}`,
+      : `Shipped ${feature.name}: merged ${feature.branch} into ${res.targetBranch}.${tail}` +
+        `${syncNote ? ` ${syncNote}` : ""}${published.note ? ` ${published.note}` : ""}`,
   });
 }

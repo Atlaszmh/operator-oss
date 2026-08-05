@@ -16,7 +16,7 @@
 // sweep() is idempotent and serialized per project, so the two triggers
 // overlapping is harmless.
 
-import { syncFeaturesToBase, syncTasksToBase, catchUpWorktree } from "./featureSync";
+import { syncFeaturesToBase, syncTasksToBase, catchUpWorktree, publishProjectBranch } from "./featureSync";
 import {
   getProject,
   getFeature,
@@ -345,8 +345,13 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
     // Then, if what landed was the PROJECT branch, every live feature follows —
     // unattended work is exactly where silent divergence is worst, because
     // nobody is watching the branches while autopilot walks the plan.
-    if (result.targetBranch === project.branch)
+    if (result.targetBranch === project.branch) {
       await syncFeaturesToBase(project, { except: task.feature_id ?? undefined });
+      // Unattended work publishes on the same rule as a hand-clicked ship —
+      // otherwise an autopilot run's commits sit local while everything else
+      // about the flow looks finished.
+      await publishProjectBranch(project);
+    }
   }
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });

@@ -1,6 +1,7 @@
-import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount } from "./git";
+import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount, pushBranch } from "./git";
 import { listFeatures, listTasks, listProjects, createTask, getFeature, updateFeature, updateTask, taskBaseBranch } from "./store";
 import { buildFeatureConflictTaskPrompt } from "./agents/shared";
+import { resolveFeatures } from "./features";
 import { hasTurn } from "./abort";
 import type { FeatureWithCounts, Project, Task } from "./types";
 
@@ -400,4 +401,33 @@ export async function sweepFeatureHealth(): Promise<void> {
       await reconcileFeatureBranch(p, f);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Publishing what landed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Push the project branch to origin after something landed on it.
+ *
+ * WHY IT IS A FLAG AND OFF BY DEFAULT. Every other step in the flow is local and
+ * reversible; this one leaves the machine, and a tool that publishes without
+ * being asked is one you have to remember to distrust. Turning it on
+ * (ORCH_FEATURE_PUSH_ON_SHIP=1) is the statement "this remote is mine and I push
+ * to it directly" — true of a personal fork, false of anything with review.
+ *
+ * WHY IT NEVER FAILS ITS CALLER. The merge already succeeded and is committed
+ * locally; the remote being unreachable does not un-merge it. So a failure is
+ * reported and surfaced, never thrown — offline shipping still works, and the
+ * next successful landing pushes the backlog along with it, because `git push`
+ * sends every commit the remote is missing rather than only the newest.
+ */
+export async function publishProjectBranch(project: Project): Promise<{ pushed: boolean; note: string }> {
+  if (!resolveFeatures().pushOnShip || !project.repo_path) return { pushed: false, note: "" };
+  const res = await pushBranch(project.repo_path, project.branch);
+  if (res.ok) return { pushed: true, note: `Pushed ${project.branch} to origin.` };
+  // A missing remote is configuration, not a fault — say it once, plainly, and
+  // don't dress it up as a failure the user has to act on urgently.
+  const why = res.skipped ? res.error : `could not push ${project.branch} to origin: ${res.error}`;
+  return { pushed: false, note: `${why} — the merge landed locally and will push with the next successful one.` };
 }

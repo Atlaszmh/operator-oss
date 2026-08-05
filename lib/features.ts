@@ -35,6 +35,12 @@ export interface Features {
    *  against real work before it's trusted. ORCH_FEATURE_AUTOPILOT_SHADOW=0
    *  is the deliberate act of trusting it. */
   autopilotShadow: boolean;
+  /** Push the project branch to `origin` after anything lands on it — a ship, or
+   *  a task merging straight to it. Off by default: pushing is the one action in
+   *  the flow that leaves this machine, and a tool that publishes without being
+   *  asked is a tool you have to remember to distrust. ORCH_FEATURE_PUSH_ON_SHIP=1
+   *  for a fork you push to directly (no PR review step in between). */
+  pushOnShip: boolean;
 }
 
 export const DEFAULT_FEATURES: Features = {
@@ -43,6 +49,7 @@ export const DEFAULT_FEATURES: Features = {
   services: true,
   autopilot: false,
   autopilotShadow: true,
+  pushOnShip: false,
 };
 
 const truthy = (v: string | undefined) => v === "1" || v === "true" || v === "on";
@@ -59,6 +66,7 @@ export function resolveFeatures(): Features {
     services: flag(process.env.ORCH_FEATURE_SERVICES, DEFAULT_FEATURES.services),
     autopilot: flag(process.env.ORCH_FEATURE_AUTOPILOT, DEFAULT_FEATURES.autopilot),
     autopilotShadow: flag(process.env.ORCH_FEATURE_AUTOPILOT_SHADOW, DEFAULT_FEATURES.autopilotShadow),
+    pushOnShip: flag(process.env.ORCH_FEATURE_PUSH_ON_SHIP, DEFAULT_FEATURES.pushOnShip),
   };
 }
 

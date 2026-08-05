@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTask, getProject, updateTask, recordTaskMerge, taskBaseBranch } from "@/lib/store";
 import { mergeTask } from "@/lib/git";
-import { syncFeaturesToBase, syncTasksToBase } from "@/lib/featureSync";
+import { syncFeaturesToBase, syncTasksToBase, publishProjectBranch } from "@/lib/featureSync";
 import { track } from "@/lib/analytics";
 import { hasTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
@@ -66,7 +66,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         // the feature-level catch-up applies too. Keyed off what actually
         // landed rather than off the task's shape, so there is one rule and no
         // second place to forget it.
-        if (result.targetBranch === project.branch) await syncFeaturesToBase(project);
+        if (result.targetBranch === project.branch) {
+          await syncFeaturesToBase(project);
+          // Same rule as a ship: the project branch moved, so publish it.
+          await publishProjectBranch(project);
+        }
       }
     }
     return NextResponse.json(result, { status: result.ok ? 200 : 409 });
