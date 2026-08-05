@@ -71,6 +71,7 @@ services:
       # cannot merge anything until it is explicitly set to 0.
       ORCH_FEATURE_AUTOPILOT: ${ORCH_FEATURE_AUTOPILOT:-}
       ORCH_FEATURE_AUTOPILOT_SHADOW: ${ORCH_FEATURE_AUTOPILOT_SHADOW:-}
+      ORCH_FEATURE_PUSH_ON_SHIP: ${ORCH_FEATURE_PUSH_ON_SHIP:-}
       # Autopilot tuning (lib/config.ts); empty = the documented defaults
       # (2 concurrent tasks, 2 gate attempts, 10-minute test timeout).
       ORCH_AUTOPILOT_CONCURRENCY: ${ORCH_AUTOPILOT_CONCURRENCY:-}
