@@ -1,6 +1,7 @@
-import { landBranch } from "./git";
-import { listFeatures, updateFeature } from "./store";
-import type { FeatureWithCounts, Project } from "./types";
+import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge } from "./git";
+import { listFeatures, listTasks, updateFeature, updateTask, taskBaseBranch } from "./store";
+import { hasTurn } from "./abort";
+import type { FeatureWithCounts, Project, Task } from "./types";
 
 /**
  * Catch every live feature branch up with the project branch, the moment
@@ -136,4 +137,135 @@ export function summarizeSync(results: FeatureSyncResult[]): string {
         `resolve ${stuck.length === 1 ? "it" : "them"} before shipping.`
     );
   return parts.join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// The same rule, one level down: a TASK branch following ITS base.
+//
+// Features drift from the project branch; sibling tasks drift from the feature
+// branch, and for the identical reason — each forks once and only reconciles at
+// merge time, while everything its siblings land moves the base underneath it.
+// This half is where it hurts most: a feature runs several tasks at once by
+// design (AUTOPILOT_CONCURRENCY), so the racing is not incidental, it IS the
+// execution model.
+// ---------------------------------------------------------------------------
+
+/** What one worktree's catch-up did. `conflicts` non-empty ⇒ it could not be caught up. */
+export interface CatchUpResult {
+  caughtUp: boolean;
+  behind: number;
+  baseTip: string;
+  conflicts: string[];
+  /** The tree had uncommitted work, so it was deliberately left alone. */
+  skippedDirty: boolean;
+}
+
+/**
+ * Catch one task's worktree up to its base, by the only two routes that are
+ * safe without a human: a fast-forward when the task has no divergent work, and
+ * an ordinary merge when it does but `merge-tree` predicts no conflict.
+ *
+ * THE SECOND TIER IS THE WHOLE POINT, and the reason this is a shared function
+ * rather than an inlined `fastForwardWorktree`. Fast-forward-only stops working
+ * the instant a task commits anything — which is immediately — so a task drifts
+ * one commit further behind for every sibling that lands while it works. The
+ * conflict it eventually hits is the size of the whole race, not the size of
+ * the change. `lib/runner.ts` learned this at turn start; autopilot's pre-gate
+ * catch-up was still fast-forward-only, and silently discarded the boolean
+ * saying it had failed, which is how a task reached its merge un-caught-up and
+ * conflicted anyway.
+ *
+ * A dirty tree is left alone: prepareWorktreeMerge would commit an agent's
+ * half-finished edits to get a clean tree, and that is not this function's call.
+ */
+export async function catchUpWorktree(project: Project, task: Task, base: string): Promise<CatchUpResult> {
+  const none: CatchUpResult = { caughtUp: false, behind: 0, baseTip: "", conflicts: [], skippedDirty: false };
+  if (!task.worktree_path || !task.work_branch || !project.repo_path) return none;
+  try {
+    const s = await worktreeSyncStatus({
+      repoPath: project.repo_path,
+      worktreePath: task.worktree_path,
+      workBranch: task.work_branch,
+      baseBranch: base,
+    });
+    if (s.behind === 0) return { ...none, baseTip: s.baseTip };
+    if (s.isDirty) return { ...none, behind: s.behind, baseTip: s.baseTip, skippedDirty: true };
+
+    if (s.canFastForward) {
+      const ok = await fastForwardWorktree(task.worktree_path, base);
+      return { caughtUp: ok, behind: s.behind, baseTip: s.baseTip, conflicts: [], skippedDirty: false };
+    }
+    if (s.clean) {
+      const prep = await prepareWorktreeMerge({
+        repoPath: project.repo_path,
+        worktreePath: task.worktree_path,
+        baseBranch: base,
+        message: `Sync ${base} into ${task.title} (orchestrator task ${task.id})`,
+      });
+      // prep.ok && !prep.clean means merge-tree's prediction was wrong at the
+      // margin and the worktree now holds markers — report them rather than
+      // pretending the catch-up worked.
+      return {
+        caughtUp: prep.ok && prep.clean,
+        behind: s.behind,
+        baseTip: s.baseTip,
+        conflicts: prep.ok && prep.clean ? [] : prep.conflicts ?? [],
+        skippedDirty: false,
+      };
+    }
+    // merge-tree already predicts a conflict — don't touch the tree at all.
+    return { caughtUp: false, behind: s.behind, baseTip: s.baseTip, conflicts: s.conflicts ?? [], skippedDirty: false };
+  } catch {
+    // A git hiccup must never break the caller — the catch-up is best effort.
+    return none;
+  }
+}
+
+export interface TaskSyncResult {
+  taskId: string;
+  title: string;
+  caughtUp: boolean;
+  behind: number;
+  conflicts: string[];
+}
+
+/**
+ * After a task lands on `baseBranch`, catch every OTHER idle worktree on that
+ * same base up to it — immediately, rather than at each sibling's next turn.
+ *
+ * Skips anything with a live turn: the agent is editing those files right now,
+ * and moving the tree underneath it would corrupt work in progress. Those catch
+ * up at their next turn start (lib/runner.ts) and again before their gate
+ * (lib/autopilot.ts), both of which now use the same ladder as this.
+ *
+ * A sibling that genuinely conflicts is left untouched and reported, not forced:
+ * there IS a session that owns it, so the existing conflict flow can hand it to
+ * that agent with full context — unlike a feature-level conflict, which has
+ * nobody.
+ */
+export async function syncTasksToBase(
+  project: Project,
+  baseBranch: string,
+  opts: { except?: string } = {}
+): Promise<TaskSyncResult[]> {
+  if (!project.repo_path || !baseBranch) return [];
+  const siblings = listTasks(project.id).filter(
+    (t) =>
+      t.id !== opts.except &&
+      !!t.worktree_path &&
+      !!t.work_branch &&
+      !t.running &&
+      !hasTurn(t.id) &&
+      t.status !== "done" &&
+      t.status !== "cancelled" &&
+      taskBaseBranch(t, project) === baseBranch
+  );
+
+  const results: TaskSyncResult[] = [];
+  for (const t of siblings) {
+    const r = await catchUpWorktree(project, t, baseBranch);
+    if (r.caughtUp && r.baseTip) updateTask(t.id, { base_sha: r.baseTip });
+    results.push({ taskId: t.id, title: t.title, caughtUp: r.caughtUp, behind: r.behind, conflicts: r.conflicts });
+  }
+  return results;
 }

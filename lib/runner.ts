@@ -14,7 +14,8 @@ import { extractOutcome } from "@/lib/agents/shared";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
 import { withTaskLock } from "@/lib/taskLock";
 import { publish } from "@/lib/events";
-import { worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, ensureWorktree } from "@/lib/git";
+import { prepareWorktreeMerge, ensureWorktree } from "@/lib/git";
+import { catchUpWorktree } from "@/lib/featureSync";
 import { track } from "@/lib/analytics";
 import { isPromptTooLong, CONTEXT_OVERFLOW_NOTICE, MAX_MESSAGE_CHARS, TOO_LARGE_MESSAGE } from "@/lib/promptLimits";
 import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
@@ -200,46 +201,25 @@ export async function startResumeTurn(task: Task, project: Project, userText: st
     // work at turn start is not this function's call. That case, and any genuine
     // conflict, still go to the user-driven Sync/Fix banner. A git hiccup must
     // never block the turn — just skip the catch-up.
+    // The ladder itself lives in lib/featureSync.ts (catchUpWorktree) because
+    // three callers need it and they MUST agree: this one at turn start,
+    // autopilot's pre-gate catch-up, and the sibling sweep that runs the moment
+    // anything lands on a shared base. Autopilot's copy had drifted to a bare
+    // fast-forward, which silently did nothing for any task that had committed
+    // work — the exact case the second tier exists for.
+    //
+    // The task's own base — its feature's integration branch when it has one.
+    // Catching a feature task up to the PROJECT branch would drag in work the
+    // feature deliberately isn't built on yet.
     let syncNote = "";
-    if (task.worktree_path && task.work_branch) {
-      try {
-        // The task's own base — its feature's integration branch when it has
-        // one. Catching a feature task up to the PROJECT branch would drag in
-        // work the feature deliberately isn't built on yet.
-        const base = taskBaseBranch(task, project);
-        const s = await worktreeSyncStatus({
-          repoPath: project.repo_path,
-          worktreePath: task.worktree_path,
-          workBranch: task.work_branch,
-          baseBranch: base,
-        });
-        let caughtUp = false;
-        if (s.behind > 0 && !s.isDirty) {
-          if (s.canFastForward) {
-            caughtUp = await fastForwardWorktree(task.worktree_path, base);
-          } else if (s.clean) {
-            const prep = await prepareWorktreeMerge({
-              repoPath: project.repo_path,
-              worktreePath: task.worktree_path,
-              baseBranch: base,
-              message: `Sync ${base} into ${task.title} (orchestrator task ${task.id})`,
-            });
-            // prep.ok && !prep.clean means merge-tree's prediction was wrong at
-            // the margin and the worktree now holds markers — leave it for the
-            // banner rather than starting a turn on a conflicted tree.
-            caughtUp = prep.ok && prep.clean;
-          }
-        }
-        if (caughtUp) {
-          if (s.baseTip) {
-            task.base_sha = s.baseTip;
-            updateTask(id, { base_sha: s.baseTip });
-          }
-          syncNote = `✓ Caught up to ${base} (was ${s.behind} behind).`;
-        }
-      } catch {
-        // skip the catch-up
+    const base = taskBaseBranch(task, project);
+    const caught = await catchUpWorktree(project, task, base);
+    if (caught.caughtUp) {
+      if (caught.baseTip) {
+        task.base_sha = caught.baseTip;
+        updateTask(id, { base_sha: caught.baseTip });
       }
+      syncNote = `✓ Caught up to ${base} (was ${caught.behind} behind).`;
     }
     const userMsg = addMessage(id, gen, "user", userText);
     updateTask(id, { running: 1, suggested: 0, awaiting_input: 0 });

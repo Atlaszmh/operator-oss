@@ -16,7 +16,7 @@
 // sweep() is idempotent and serialized per project, so the two triggers
 // overlapping is harmless.
 
-import { syncFeaturesToBase } from "./featureSync";
+import { syncFeaturesToBase, syncTasksToBase, catchUpWorktree } from "./featureSync";
 import {
   getProject,
   getFeature,
@@ -253,15 +253,28 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   // independently-green tasks CAN assemble into a red branch with no git
   // conflict anywhere, and when nothing runs CI on the far side, "the PR will
   // catch it" means nothing catches it.
-  const preSync = await worktreeSyncStatus({
-    repoPath: project.repo_path,
-    worktreePath: task.worktree_path,
-    workBranch: task.work_branch,
-    baseBranch: base,
-  }).catch(() => null);
-  await fastForwardWorktree(task.worktree_path, base);
+  // The shared ladder, NOT a bare fast-forward. This was `fastForwardWorktree`
+  // with its boolean dropped on the floor — which meant it did nothing at all
+  // for any task that had committed work while its base moved, i.e. every task
+  // in a feature running siblings concurrently. The task then gated against a
+  // tree that had never seen its siblings' work and conflicted at the merge.
+  const preSync = await catchUpWorktree(project, task, base);
 
-  if (preSync && preSync.behind > 0) {
+  // Predicted or materialised conflicts: hand it to the task's OWN agent now,
+  // with the base fresh, instead of gating a stale tree and discovering the same
+  // conflict one merge later. Same escalation budget as a merge conflict.
+  if (preSync.conflicts.length) {
+    const attempts = task.gate_attempts + 1;
+    if (attempts > AUTOPILOT_ATTEMPTS) {
+      block(task, `Catching up to ${base} conflicts in ${preSync.conflicts.length} file(s), and the agent could not resolve it.`);
+      return;
+    }
+    updateTask(task.id, { gate_attempts: attempts });
+    await sendTurn(project, task, buildConflictPrompt(base, preSync.conflicts));
+    return;
+  }
+
+  if (preSync.behind > 0) {
     const retest = await runTestsIn(project, task.worktree_path);
     if (retest.ran && !retest.ok) {
       const attempts = task.gate_attempts + 1;
@@ -324,12 +337,17 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
       additions: result.additions ?? 0,
       deletions: result.deletions ?? 0,
     });
-  // Same rule as the manual merge route: if what just landed was the PROJECT
-  // branch, every other live feature branch catches up now rather than at its
-  // own ship. Unattended work is exactly where silent divergence is worst —
-  // nobody is watching the branches while autopilot walks the plan.
-  if (!result.alreadyMerged && result.targetBranch === project.branch)
-    await syncFeaturesToBase(project, { except: task.feature_id ?? undefined });
+  if (!result.alreadyMerged) {
+    // Sibling tasks first: they share this base and are the ones racing it.
+    // Catching them up HERE is what stops the next one hitting a conflict the
+    // size of the whole race rather than the size of this merge.
+    await syncTasksToBase(project, base, { except: task.id });
+    // Then, if what landed was the PROJECT branch, every live feature follows —
+    // unattended work is exactly where silent divergence is worst, because
+    // nobody is watching the branches while autopilot walks the plan.
+    if (result.targetBranch === project.branch)
+      await syncFeaturesToBase(project, { except: task.feature_id ?? undefined });
+  }
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
 }
