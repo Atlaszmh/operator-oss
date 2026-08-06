@@ -420,7 +420,7 @@ export function ContextModal({ project, agents, onSetDefaultAgent, onClose, onSa
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="field" style={{ flex: "0 0 150px" }}>
-          <div className="lab">Key <span className="opt">— {key || project.key}-1, -2, …</span></div>
+          <div className="lab">Key <span className="opt">— {key || project.key}-F1, -T2, …</span></div>
           <input type="text" className="ctx-mono" value={key} maxLength={10} onChange={(e) => setKey(e.target.value.toUpperCase())} />
         </div>
       </div>

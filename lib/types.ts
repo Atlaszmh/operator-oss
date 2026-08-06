@@ -18,7 +18,7 @@ export interface Project {
   test_command: string; // optional one-shot test command
   port: number; // deterministic per-project port, injected as PORT into services + the PTY
   default_agent: string; // agent driver new tasks in this project run under (lib/agents/registry.ts)
-  key: string; // JIRA-style prefix, unique across projects — "TME" in TME-42 (lib/keys.ts)
+  key: string; // JIRA-style prefix, unique across projects — "TME" in TME-T42 (lib/keys.ts)
   key_seq: number; // the counter tasks AND features draw their number from; never decremented
   recap: string; // last LLM "where you left off" recap (auto-generated when idle)
   recap_at: number; // when the recap was generated (0 = none)
@@ -65,7 +65,7 @@ export interface Feature {
 // members are excluded from `total` — they're proposals, not committed work, so
 // a freshly planned feature reads "0/0 · +12 suggested" rather than "0/12".
 export interface FeatureWithCounts extends Feature {
-  key: string; // the rendered "TME-42", derived from the project's key + seq
+  key: string; // the rendered "TME-F42", derived from the project's key + seq
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'
   merged_count: number; // of `total`, those whose branch has landed

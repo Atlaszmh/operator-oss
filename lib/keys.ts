@@ -1,7 +1,14 @@
-// JIRA-style keys: a per-project prefix (projects.key) plus a per-project number
-// (tasks.seq / features.seq, handed out by the shared projects.key_seq counter).
+// JIRA-style keys: a per-project prefix (projects.key), a one-letter TYPE affix,
+// and a per-project number (tasks.seq / features.seq, handed out by the shared
+// projects.key_seq counter). "TME-T42" is task 42; "TME-F41" is a feature. The
+// affix is there so a key tells you its scope without a lookup.
 //
-// The rendered "TME-42" is DERIVED at read time, never stored. Storing it would
+// The counter stays shared across both types, so the number alone is still
+// unique within a project — the affix reads, it doesn't identify. That's why
+// parseKey accepts a bare "TME-42" too: keys written down before the affix
+// existed still resolve.
+//
+// The rendered "TME-T42" is DERIVED at read time, never stored. Storing it would
 // be a second source of truth that drifts the moment a project's key is edited,
 // and repairing it would mean a backfill over every task and feature; deriving
 // makes a key change instant and total. Same argument listFeatures() makes for
@@ -54,22 +61,31 @@ export function validateKey(raw: string): string | null {
   return null;
 }
 
+/** The type affix: F for a feature, T for a task. */
+export type KeyKind = "F" | "T";
+
 /**
  * The rendered key. "" when either half is missing so every caller can render
  * nothing without a special case — a project predating the backfill, or a row
  * whose seq was never allocated, simply has no key rather than a broken one.
  */
-export const displayKey = (projectKey: string, seq: number): string =>
-  projectKey && seq > 0 ? `${projectKey}-${seq}` : "";
+export const displayKey = (projectKey: string, seq: number, kind: KeyKind): string =>
+  projectKey && seq > 0 ? `${projectKey}-${kind}${seq}` : "";
 
 /**
- * Split a key reference back into its halves, or null if it isn't one. Used to
- * resolve "TME-42" against a project (see findFeature) — the prefix is checked
+ * Split a key reference back into its parts, or null if it isn't one. Used to
+ * resolve "TME-F42" against a project (see findFeature) — the prefix is checked
  * by the caller, which is the only place that knows whose key it should be.
+ *
+ * `kind` is null for a pre-affix "TME-42", which still resolves because the
+ * number is unique across both types. An affix that is neither F nor T is not a
+ * key at all — better a miss than "TME-X9" quietly resolving to number 9.
  */
-export function parseKey(ref: string): { prefix: string; seq: number } | null {
-  const m = /^([A-Za-z][A-Za-z0-9]*)-(\d+)$/.exec(ref.trim());
+export function parseKey(ref: string): { prefix: string; kind: KeyKind | null; seq: number } | null {
+  const m = /^([A-Za-z][A-Za-z0-9]*)-([A-Za-z]?)(\d+)$/.exec(ref.trim());
   if (!m) return null;
-  const seq = Number(m[2]);
-  return seq > 0 ? { prefix: m[1].toUpperCase(), seq } : null;
+  const kind = m[2].toUpperCase();
+  if (kind && kind !== "F" && kind !== "T") return null;
+  const seq = Number(m[3]);
+  return seq > 0 ? { prefix: m[1].toUpperCase(), kind: (kind || null) as KeyKind | null, seq } : null;
 }

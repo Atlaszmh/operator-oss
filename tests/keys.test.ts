@@ -80,19 +80,35 @@ describe("key validation", () => {
 });
 
 describe("display keys", () => {
-  it("joins the two halves", () => {
-    expect(displayKey("TME", 42)).toBe("TME-42");
+  it("puts the type affix between the prefix and the number", () => {
+    expect(displayKey("TME", 42, "T")).toBe("TME-T42");
+    expect(displayKey("TME", 41, "F")).toBe("TME-F41");
   });
 
   it("is empty when either half is missing, so the UI renders nothing", () => {
-    expect(displayKey("", 42)).toBe("");
-    expect(displayKey("TME", 0)).toBe("");
+    expect(displayKey("", 42, "T")).toBe("");
+    expect(displayKey("TME", 0, "T")).toBe("");
   });
 
   it("round-trips through parseKey", () => {
-    expect(parseKey("tme-42")).toEqual({ prefix: "TME", seq: 42 });
+    expect(parseKey("tme-t42")).toEqual({ prefix: "TME", kind: "T", seq: 42 });
+    expect(parseKey("TME-F41")).toEqual({ prefix: "TME", kind: "F", seq: 41 });
     expect(parseKey("Billing v2")).toBeNull();
-    expect(parseKey("TME-0")).toBeNull();
+    expect(parseKey("TME-T0")).toBeNull();
+  });
+
+  it("still reads a pre-affix key, and a prefix that ends in a digit", () => {
+    // Keys written down before the affix existed must keep resolving — the
+    // number alone is unique within a project.
+    expect(parseKey("TME-42")).toEqual({ prefix: "TME", kind: null, seq: 42 });
+    // "TME2" is a real derived prefix (uniqueProjectKey's collision suffix), so
+    // the split must not eat its digit.
+    expect(parseKey("TME2-T7")).toEqual({ prefix: "TME2", kind: "T", seq: 7 });
+    expect(parseKey("TME2-7")).toEqual({ prefix: "TME2", kind: null, seq: 7 });
+  });
+
+  it("rejects an affix that is neither F nor T", () => {
+    expect(parseKey("TME-X9")).toBeNull();
   });
 });
 
@@ -142,9 +158,9 @@ describe("keys on read", () => {
     const feature = createFeature({ project_id: p.id, name: "Grouped" });
     const task = createTask({ project_id: p.id, title: "Filed", feature_id: feature.id });
 
-    expect(listFeatures(p.id).find((f) => f.id === feature.id)!.key).toBe(`${p.key}-1`);
-    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe(`${p.key}-2`);
-    expect(listAllTasksLite().find((t) => t.id === task.id)!.key).toBe(`${p.key}-2`);
+    expect(listFeatures(p.id).find((f) => f.id === feature.id)!.key).toBe(`${p.key}-F1`);
+    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe(`${p.key}-T2`);
+    expect(listAllTasksLite().find((t) => t.id === task.id)!.key).toBe(`${p.key}-T2`);
   });
 
   it("re-keys everything when the project key changes", () => {
@@ -152,22 +168,33 @@ describe("keys on read", () => {
     // task and feature in the project reads the new key immediately.
     const p = createProject({ name: "Rename Me" });
     const task = createTask({ project_id: p.id, title: "x" });
-    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe(`${p.key}-1`);
+    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe(`${p.key}-T1`);
 
     updateProject(p.id, { key: "NEWKEY" });
 
-    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe("NEWKEY-1");
+    expect(listTasks(p.id).find((t) => t.id === task.id)!.key).toBe("NEWKEY-T1");
   });
 
   it("resolves a feature by key, id, or name", () => {
     const p = createProject({ name: "Resolve Refs" });
     const feature = createFeature({ project_id: p.id, name: "Billing v2" });
-    const key = `${p.key}-${feature.seq}`;
+    const key = `${p.key}-F${feature.seq}`;
 
     expect(findFeature(p.id, key)!.id).toBe(feature.id);
     expect(findFeature(p.id, key.toLowerCase())!.id).toBe(feature.id);
     expect(findFeature(p.id, feature.id)!.id).toBe(feature.id);
     expect(findFeature(p.id, "Billing v2")!.id).toBe(feature.id);
+    // A key written down before the affix existed still resolves.
+    expect(findFeature(p.id, `${p.key}-${feature.seq}`)!.id).toBe(feature.id);
+  });
+
+  it("does not resolve a task's key to a feature of the same number", () => {
+    // Same argument as the wrong-prefix case below: the caller auto-creates on a
+    // miss, and silently handing back the wrong scope is worse than that.
+    const p = createProject({ name: "Wrong Scope" });
+    const feature = createFeature({ project_id: p.id, name: "Grouped" });
+
+    expect(findFeature(p.id, `${p.key}-T${feature.seq}`)).toBeUndefined();
   });
 
   it("backfills a pre-key DB, numbering features and tasks together by created_at", () => {
@@ -206,6 +233,6 @@ describe("keys on read", () => {
 
     // Right number, wrong prefix — must not match, and must not fall through to
     // auto-creating confusion in the caller.
-    expect(findFeature(b.id, `${a.key}-${feature.seq}`)).toBeUndefined();
+    expect(findFeature(b.id, `${a.key}-F${feature.seq}`)).toBeUndefined();
   });
 });

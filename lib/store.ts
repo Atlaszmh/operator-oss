@@ -126,7 +126,7 @@ export function listAllTasksLite(): {
     )
     .all() as (ReturnType<typeof listAllTasksLite>[number] & { seq: number; project_key: string })[];
   // Cross-project, so the prefix comes from the join rather than one lookup.
-  return rows.map((r) => ({ ...r, key: displayKey(r.project_key, r.seq) }));
+  return rows.map((r) => ({ ...r, key: displayKey(r.project_key, r.seq, "T") }));
 }
 
 export function createProject(input: {
@@ -165,11 +165,11 @@ function nextProjectKey(name: string): string {
 
 /**
  * Claim the next number for a project, for either a task or a feature — one
- * counter serves both, so TME-41 and TME-42 may be one of each, exactly as an
+ * counter serves both, so TME-F41 and TME-T42 may be one of each, exactly as an
  * issue key works in JIRA.
  *
  * Monotonic: it advances the stored counter rather than reading MAX(seq), so
- * deleting TME-42 cannot hand 42 to the next thing created. Same rule as
+ * deleting TME-T42 cannot hand 42 to the next thing created. Same rule as
  * nextServicePort(), for the same reason — an identifier that gets recycled
  * silently repoints every place it was already written down.
  */
@@ -250,7 +250,7 @@ export function setProjectRefresh(
 // latest turn's input-side tokens, NOT a cumulative sum (see getTaskContext).
 // `depends_on` lists the task ids this task is blocked by (see task_dependencies).
 export type TaskWithUsage = Task & {
-  key: string; // the rendered "TME-42", derived from the project's key + seq
+  key: string; // the rendered "TME-T42", derived from the project's key + seq
   cost_usd: number;
   total_tokens: number;
   cache_read_tokens: number;
@@ -301,7 +301,7 @@ export function listTasks(projectId: string): TaskWithUsage[] {
   const pkey = projectKeyOf(projectId);
   return rows.map((r) => ({
     ...r,
-    key: displayKey(pkey, r.seq),
+    key: displayKey(pkey, r.seq, "T"),
     context_pct: contextPct(r.context_tokens, r.agent, r.model),
     depends_on: byTask.get(r.id) ?? [],
   }));
@@ -345,7 +345,7 @@ export function listFeatures(projectId: string): FeatureWithCounts[] {
     )
     .all(projectId) as FeatureWithCounts[];
   const pkey = projectKeyOf(projectId);
-  return rows.map((r) => ({ ...r, key: displayKey(pkey, r.seq) }));
+  return rows.map((r) => ({ ...r, key: displayKey(pkey, r.seq, "F") }));
 }
 
 export function getFeature(id: string): Feature | undefined {
@@ -387,11 +387,13 @@ export function findFeature(projectId: string, ref: string): Feature | undefined
   const db = getDb();
   const byId = db.prepare("SELECT * FROM features WHERE id = ? AND project_id = ?").get(key, projectId) as Feature | undefined;
   if (byId) return byId;
-  // "TME-42" — but only THIS project's prefix, so another project's key never
+  // "TME-F42" — but only THIS project's prefix, so another project's key never
   // resolves to a same-numbered feature here (the caller auto-creates on a miss,
-  // and a wrong-project hit would be far worse than a new empty feature).
+  // and a wrong-project hit would be far worse than a new empty feature). Same
+  // argument rules out a task's "TME-T42": wrong scope is as wrong as wrong
+  // project. A pre-affix "TME-42" (kind null) still resolves.
   const parsed = parseKey(key);
-  if (parsed && parsed.prefix === normalizeKey(projectKeyOf(projectId))) {
+  if (parsed && parsed.kind !== "T" && parsed.prefix === normalizeKey(projectKeyOf(projectId))) {
     const byKey = db.prepare("SELECT * FROM features WHERE project_id = ? AND seq = ?").get(projectId, parsed.seq) as Feature | undefined;
     if (byKey) return byKey;
   }
