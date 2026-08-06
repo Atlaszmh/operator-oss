@@ -40,8 +40,17 @@ import { subscribeGlobal, publishGlobal, publish } from "./events";
 import { hasTurn } from "./abort";
 import { workStarted, workEnded } from "./idle";
 import { resolveFeatures } from "./features";
-import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "./config";
+import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS, GATE_TEST_TIMEOUT_MS } from "./config";
 import type { Feature, Project, Task } from "./types";
+
+/**
+ * How long a task may sit with a gate that can't reach a verdict before
+ * autopilot gives up waiting and escalates it. Derived from the project's own
+ * test timeout rather than being a knob of its own: three whole gate windows
+ * with nothing to show is not a slow suite, it's a reviewer that isn't coming
+ * back.
+ */
+export const GATE_STALL_MS = GATE_TEST_TIMEOUT_MS * 3;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -166,8 +175,17 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
   await maybeOpenPr(project, feature);
 }
 
-/** A task the gate should look at: started, handed back to the user, not
- *  running, not already escalated, not finished. */
+/**
+ * A task the gate should look at: it ran, its turn ended, nothing is working it,
+ * it hasn't been escalated, and it isn't finished.
+ *
+ * Deliberately NOT keyed on awaiting_input any more. That flag now means "a
+ * human is needed" and nothing else (see autopilotOwns in lib/store.ts) — an
+ * autopilot member's turn ends with it clear, which is the whole point. The
+ * facts above are what "settled" always actually meant; awaiting_input was a
+ * proxy for them. Dropping the proxy also makes restart recovery strictly
+ * safer: a task whose gate was interrupted is still recognisable from the row.
+ */
 function isSettledForGating(t: Task): boolean {
   return (
     !!t.started &&
@@ -175,7 +193,6 @@ function isSettledForGating(t: Task): boolean {
     !t.running &&
     !hasTurn(t.id) &&
     !t.blocked_reason &&
-    !!t.awaiting_input &&
     t.status !== "done" &&
     t.status !== "cancelled" &&
     t.status !== "on_hold"
@@ -196,10 +213,17 @@ async function gateAndLand(project: Project, feature: Feature, task: Task): Prom
   // the next sweep gates it again once the reviewer is back. Charging an outage
   // to the task blocked finished work behind it AND sent the agent an error
   // string as if it were review feedback to act on.
-  // ponytail: no user-visible signal while the reviewer is down — the task just
-  // sits in "needs you" as it already did. Surface a per-task inconclusive count
-  // if outages ever get long enough to be confusing.
+  //
+  // Silent only while the outage is plausibly an outage. Past that the task has
+  // stopped waiting for a reviewer and started being stranded — invisible, with
+  // finished work in it — so it goes in front of the user with the reason. The
+  // clock is the row's own updated_at, which an inconclusive pass never touches,
+  // so no counter has to be stored anywhere.
   if (verdict.inconclusive) {
+    if (Date.now() - task.updated_at > GATE_STALL_MS) {
+      block(task, `The gate has been unable to run for over ${Math.round(GATE_STALL_MS / 60000)} minutes, so autopilot stopped waiting for it.\n\n${verdict.feedback}`);
+      return;
+    }
     console.warn(`[autopilot] gate inconclusive for task ${task.id}, will retry: ${verdict.feedback}`);
     return;
   }

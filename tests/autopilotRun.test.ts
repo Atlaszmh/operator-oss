@@ -46,7 +46,9 @@ vi.mock("@/lib/github", async (importOriginal) => ({
 
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { ensureAutopilot, sweep } from "@/lib/autopilot";
+import { ensureAutopilot, sweep, GATE_STALL_MS } from "@/lib/autopilot";
+import { startInitialTurn } from "@/lib/runner";
+import { getDb } from "@/lib/db";
 import { createFeatureBranch } from "@/lib/git";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "@/lib/config";
 import { makeRepo } from "./helpers";
@@ -195,7 +197,11 @@ describe("autopilot scheduler", () => {
     expect(during.blocked_reason).toBe("");
     expect(during.gate_attempts).toBe(0); // full retry budget intact for a real review
     expect(during.status).not.toBe("done");
-    expect(during.awaiting_input).toBe(1); // still settled, so the next sweep gates it again
+    // Settled and re-gatable, but NOT flagged for the user: an outage the gate
+    // will retry on its own is not something a human has to come and do.
+    expect(during.awaiting_input).toBe(0);
+    expect(during.running).toBe(0);
+    expect(during.started).toBe(1);
     // The outage was never sent into the task as work to do.
     expect(launchedIds()).toEqual([tasks[0].id]);
     expect(runTurnMock.mock.calls.some((c) => /could not run/.test(String(c[2])))).toBe(false);
@@ -306,4 +312,68 @@ describe("autopilot scheduler", () => {
     expect(t.merged_at).toBe(0);
     expect(t.blocked_reason).toMatch(/shadow mode/i);
   }, 30_000);
+
+  // The complaint this came from: every task in an unattended run lit up the
+  // "needs you" pill (and fired a desktop notification) the moment its turn
+  // ended, for the whole length of the gate — minutes on a real project — and
+  // then merged itself with nobody having done anything. A turn ending under
+  // autopilot hands off to the gate, not to the user.
+  it("a member's turn ending does not flag the user, but a hand-driven task's does", async () => {
+    // Hold the gate open so the settled-but-not-yet-judged window is observable.
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    gateMock.mockImplementation(async () => {
+      await held;
+      return { ok: true, feedback: "", testsRan: true, reviewRan: true };
+    });
+
+    const { project, tasks } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+    const mid = getTask(tasks[0].id)!;
+    expect(mid.running).toBe(0); // the turn is over…
+    expect(mid.awaiting_input).toBe(0); // …and it is autopilot's problem, not yours
+
+    release();
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 15_000 });
+
+    // Same runner, same turn, feature switch off: still the user's to pick up.
+    const solo = await planFixture(1, { autopilot: false });
+    await startInitialTurn(getTask(solo.tasks[0].id)!, solo.project);
+    await vi.waitFor(() => expect(getTask(solo.tasks[0].id)!.running).toBe(0), { timeout: 15_000 });
+    expect(getTask(solo.tasks[0].id)!.awaiting_input).toBe(1);
+  }, 40_000);
+
+  // Suppressing the flag can't mean suppressing the task: a gate that never
+  // reaches a verdict has to surface eventually, or finished work sits in an
+  // invisible row forever.
+  it("escalates a gate that has been inconclusive for too long", async () => {
+    const { project, tasks } = await planFixture(1);
+    gateMock.mockResolvedValue({
+      ok: false,
+      inconclusive: true,
+      feedback: "The review could not run: usage limit reached",
+      testsRan: true,
+      reviewRan: false,
+    });
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+    expect(getTask(tasks[0].id)!.blocked_reason).toBe(""); // still inside the grace
+
+    // Backdate the row past the grace — the same thing a long outage does, and
+    // the reason the check needs no stored counter.
+    getDb()
+      .prepare("UPDATE tasks SET updated_at = ? WHERE id = ?")
+      .run(Date.now() - GATE_STALL_MS - 1000, tasks[0].id);
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.blocked_reason).not.toBe(""), { timeout: 15_000 });
+    const t = getTask(tasks[0].id)!;
+    expect(t.awaiting_input).toBe(1); // back in front of the user, with a reason
+    expect(t.blocked_reason).toMatch(/unable to run/i);
+    expect(t.gate_attempts).toBe(0); // an outage still isn't the task's fault
+  }, 40_000);
 });

@@ -7,6 +7,7 @@ import { getDb } from "./db";
 import { modelContextWindow } from "./agents/capabilities";
 import { displayKey, normalizeKey, parseKey, uniqueProjectKey } from "./keys";
 import { SERVICE_PORT_BASE } from "./config";
+import { resolveFeatures } from "./features";
 import type { Project, Task, Feature, FeatureWithCounts, Message, PendingMessage, Summary, Session, Priority, Status, MsgRole, TurnUsage, UsageTotals } from "./types";
 
 // ---------- projects ----------
@@ -491,6 +492,28 @@ export function featureMembers(featureId: string): Task[] {
   return getDb()
     .prepare("SELECT * FROM tasks WHERE feature_id = ? ORDER BY position ASC, created_at ASC")
     .all(featureId) as Task[];
+}
+
+/**
+ * True when autopilot — not the user — is the one who picks this task up when
+ * its turn ends.
+ *
+ * The runner's rule is "a turn that ran and ended mid-task is waiting on the
+ * user", which is right for a hand-driven task and wrong for every member of an
+ * approved plan: there, the end of a turn is the START of the gate, and the gate
+ * is a test command plus a reviewer turn — minutes, on a real project. Flagging
+ * awaiting_input for that window made every task in an unattended run announce
+ * "needs your input" (project badge, the titlebar pill, a desktop notification)
+ * and then quietly merge itself with nobody having done anything. Autopilot's
+ * genuine stops all go through block(), which sets the flag explicitly.
+ *
+ * Checks the instance flag too: a feature row can still carry autopilot=1 after
+ * ORCH_FEATURE_AUTOPILOT is turned off, and nothing would then be coming for it.
+ */
+export function autopilotOwns(task: Task): boolean {
+  if (!task.feature_id || !resolveFeatures().autopilot) return false;
+  const f = getFeature(task.feature_id);
+  return !!f && !!f.autopilot && !f.archived;
 }
 
 /**

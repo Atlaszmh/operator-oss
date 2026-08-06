@@ -8,7 +8,7 @@
 // turn. Stopping is only ever explicit, via lib/abort.ts (/abort route).
 
 import fs from "node:fs";
-import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting, taskBaseBranch } from "@/lib/store";
+import { updateTask, addMessage, updateMessage, recordSession, endSession, addUsage, getTask, getProject, addPendingMessage, popPendingMessage, listPendingMessages, clearPendingMessages, getSetting, setSetting, taskBaseBranch, autopilotOwns } from "@/lib/store";
 import { getDriver } from "@/lib/agents/registry";
 import { extractOutcome } from "@/lib/agents/shared";
 import { claimTurn, handoffTurn, hasTurn, ownsTurn, unregisterTurn } from "@/lib/abort";
@@ -483,10 +483,14 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
     // A turn that actually ran and ended mid-task — whether it finished on its
     // own or was Stopped — is now waiting on the user, so flag awaiting_input
     // (cleared on the next send / done) leaving it cleanly resumable.
-    if (!generationAdvanced && !superseded) {
+    //
+    // Unless autopilot owns it, in which case the turn ending hands off to the
+    // GATE, not to the user — see autopilotOwns(). Autopilot raises the flag
+    // itself, via block(), when it genuinely needs a human.
+    if (current && !generationAdvanced && !superseded) {
       // Only written when this turn reported one: a turn that says nothing must
       // not blank the outcome an earlier turn already earned.
-      updateTask(id, { running: 0, session_id: sessionId, awaiting_input: opened ? 1 : 0, ...(outcome ? { outcome } : {}) });
+      updateTask(id, { running: 0, session_id: sessionId, awaiting_input: opened && !autopilotOwns(current) ? 1 : 0, ...(outcome ? { outcome } : {}) });
     }
     // Keyed by (task_id, generation), so this settles THIS generation's session
     // row and never touches the fresh generation — safe to run either way.
@@ -598,7 +602,8 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
             const content = `⚠ ${err instanceof Error ? err.message : String(err)}`;
             const m = addMessage(id, gen, "system", content);
             publish(id, { type: "error", content, msgId: m.id, generation: gen });
-            updateTask(id, { running: 0, awaiting_input: opened ? 1 : 0 });
+            const now = getTask(id);
+            updateTask(id, { running: 0, awaiting_input: opened && !(now && autopilotOwns(now)) ? 1 : 0 });
             publish(id, { type: "turn_end" });
           });
         } else {
