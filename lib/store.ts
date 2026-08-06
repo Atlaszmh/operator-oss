@@ -530,10 +530,29 @@ export function autopilotOwns(task: Task): boolean {
  * cascade clears them on delete, so an unresolvable dep should never exist — and
  * if one does, refusing to start is the right failure direction.
  */
+/**
+ * True when a dependency edge can no longer hold anything up.
+ *
+ * Resolved against the task ROW, not against this feature's member list.
+ * `setTaskDeps` only refuses edges that leave the PROJECT, so `blocked_by`
+ * across features is both legal and normal — a plan split into chunks has its
+ * first task depending on the last task of the chunk before it. Answering from
+ * the member list made every such edge unsatisfiable forever: the whole feature
+ * sat armed with nothing ever becoming ready, so approving a plan looked like a
+ * button that did nothing, and the fix was to start the first task by hand.
+ *
+ * Cancelled counts as satisfied for the same reason done does: it is never
+ * going to complete, and a dependency that can never clear is not a queue, it
+ * is a deadlock nobody is coming to break. (Deletion needs no case of its own —
+ * task_dependencies cascades on both ends, so the edge goes with the task.)
+ */
+function depSatisfied(id: string): boolean {
+  const dep = getTask(id);
+  return dep?.status === "done" || dep?.status === "cancelled";
+}
+
 export function readyMembers(featureId: string): Task[] {
-  const members = featureMembers(featureId);
-  const done = new Set(members.filter((t) => t.status === "done").map((t) => t.id));
-  return members.filter(
+  return featureMembers(featureId).filter(
     (t) =>
       !t.suggested &&
       !t.running &&
@@ -541,7 +560,7 @@ export function readyMembers(featureId: string): Task[] {
       t.status !== "done" &&
       t.status !== "cancelled" &&
       t.status !== "on_hold" &&
-      getTaskDeps(t.id).every((id) => done.has(id))
+      getTaskDeps(t.id).every(depSatisfied)
   );
 }
 

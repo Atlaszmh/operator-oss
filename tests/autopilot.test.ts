@@ -120,6 +120,36 @@ describe("readyMembers", () => {
     updateTask(dep.id, { status: "done" });
     expect(readyMembers(f.id).map((t) => t.id)).toContain(afterDep.id);
   });
+
+  // The deadlock that made "Approve plan & start" look like a dead button: a
+  // plan split into chunks has its first task blocked_by the last task of the
+  // previous feature, which is legal (setTaskDeps only refuses edges leaving the
+  // PROJECT) and was permanently unsatisfiable, so nothing in the feature ever
+  // became ready and autopilot started nothing at all.
+  it("counts a dependency in another feature that is already done", () => {
+    const p = createProject({ name: "X" });
+    const prev = createFeature({ project_id: p.id, name: "chunk 1" });
+    const next = createFeature({ project_id: p.id, name: "chunk 2" });
+
+    const lastOfPrev = createTask({ project_id: p.id, title: "A7", feature_id: prev.id });
+    updateTask(lastOfPrev.id, { status: "done" });
+    const firstOfNext = createTask({ project_id: p.id, title: "B1", feature_id: next.id });
+    setTaskDeps(firstOfNext.id, [lastOfPrev.id]);
+
+    expect(readyMembers(next.id).map((t) => t.id)).toContain(firstOfNext.id);
+  });
+
+  // A dependency that can never complete must not park the queue forever.
+  it("counts a cancelled dependency as satisfied", () => {
+    const p = createProject({ name: "Y" });
+    const f = createFeature({ project_id: p.id, name: "YF" });
+    const cancelled = createTask({ project_id: p.id, title: "cancelled", feature_id: f.id });
+    updateTask(cancelled.id, { status: "cancelled" });
+    const afterCancelled = createTask({ project_id: p.id, title: "after", feature_id: f.id });
+    setTaskDeps(afterCancelled.id, [cancelled.id]);
+
+    expect(readyMembers(f.id).map((t) => t.id)).toContain(afterCancelled.id);
+  });
 });
 
 describe("parseVerdict", () => {
