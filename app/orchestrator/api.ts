@@ -32,3 +32,44 @@ export async function jsend<T>(url: string, method: string, body?: unknown): Pro
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/**
+ * POST to a route that reports progress as newline-delimited JSON, calling
+ * `onLine` for each object as it arrives and resolving to the LAST one.
+ *
+ * For the long multi-step routes where a single awaited response means minutes
+ * of silence (POST /api/features/:id/ship). Failures the route can detect before
+ * it starts working still arrive as an ordinary non-2xx and throw like jsend's;
+ * anything that goes wrong once the status is committed comes back as a field of
+ * the final line, which is the caller's to interpret.
+ */
+export async function jstream<T>(url: string, onLine: (line: unknown) => void): Promise<T> {
+  const r = await fetch(url, { method: "POST" });
+  if (!r.ok) await fail(r);
+  if (!r.body) throw new ApiError("the server sent no response body", r.status);
+
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let last: unknown = null;
+  const take = (chunk: string) => {
+    const line = chunk.trim();
+    if (!line) return;
+    const obj = JSON.parse(line);
+    onLine(obj);
+    last = obj;
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    // Everything up to the last newline is complete; the remainder is a partial
+    // line waiting on the next chunk.
+    const parts = buf.split("\n");
+    buf = parts.pop() ?? "";
+    for (const p of parts) take(p);
+  }
+  take(buf + dec.decode());
+  return last as T;
+}

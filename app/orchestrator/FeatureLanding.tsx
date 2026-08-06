@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "../icons";
-import { jget, jsend } from "./api";
-import { isAwaiting, relTime, featureState, FEATURE_STATE_LABEL } from "./format";
+import { jget, jsend, jstream } from "./api";
+import { isAwaiting, relTime, featureState, fmtDur, FEATURE_STATE_LABEL } from "./format";
 import { ErrNote, LoadNote, StatusDot } from "./shared";
 import { clientFeatures } from "@/lib/features";
 import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type TaskRow } from "./types";
@@ -342,6 +342,20 @@ function FeatureBranchPanel({ feature, project, onRefresh, onSelectTask }: { fea
   const [busy, setBusy] = useState<"" | "set" | "clear" | "sync" | "ship" | "resolve">("");
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Shipping's live progress: one entry per step the route announces, gaining an
+  // `ms` when it lands. Empty for every other action, which answers in one hop.
+  const [steps, setSteps] = useState<{ key: string; label: string; ms?: number }[]>([]);
+  const [elapsed, setElapsed] = useState(0);
+
+  // A running clock while shipping. The per-step timings only appear once a step
+  // is DONE, which leaves the longest wait of all — the feature gate running the
+  // whole test suite — as the one moment with no number moving on screen.
+  useEffect(() => {
+    if (busy !== "ship") return;
+    setElapsed(0);
+    const t = setInterval(() => setElapsed((n) => n + 1000), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -360,12 +374,35 @@ function FeatureBranchPanel({ feature, project, onRefresh, onSelectTask }: { fea
     setBusy(kind);
     setErr(null);
     setNote(null);
+    setSteps([]);
     try {
-      const path = kind === "sync" ? "sync" : kind === "ship" ? "ship" : "branch";
-      const method = kind === "clear" ? "DELETE" : "POST";
-      const res = await jsend<{ ok?: boolean; text?: string; conflicts?: string[] }>(`/api/features/${feature.id}/${path}`, method, body);
-      if (res.text) setNote(res.text);
-      if (res.conflicts?.length) setErr(`Conflicts in ${res.conflicts.join(", ")} — resolve them in your own checkout, then sync again.`);
+      type ActResult = { ok?: boolean; text?: string; error?: string; conflicts?: string[] };
+      let res: ActResult;
+      if (kind === "ship") {
+        // Ship streams its steps (see the route). Its late failures — a red gate,
+        // a conflicting merge — arrive as `error` on the final line rather than
+        // as a non-2xx, because the status was committed before the work began.
+        res = await jstream<ActResult>(`/api/features/${feature.id}/ship`, (line) => {
+          const l = line as { type?: string; key?: string; label?: string; ms?: number };
+          if (l.type === "step" && l.key && l.label) {
+            const { key, label } = l;
+            setSteps((s) => [...s, { key, label }]);
+          } else if (l.type === "step_done" && l.key) {
+            const { key, ms } = l;
+            setSteps((s) => s.map((x) => (x.key === key ? { ...x, ms: ms ?? 0 } : x)));
+          }
+        });
+      } else {
+        const path = kind === "sync" ? "sync" : "branch";
+        const method = kind === "clear" ? "DELETE" : "POST";
+        res = await jsend<ActResult>(`/api/features/${feature.id}/${path}`, method, body);
+      }
+      if (res.error) {
+        setErr(res.error);
+      } else {
+        if (res.text) setNote(res.text);
+        if (res.conflicts?.length) setErr(`Conflicts in ${res.conflicts.join(", ")} — resolve them in your own checkout, then sync again.`);
+      }
       await load();
       onRefresh();
     } catch (e) {
@@ -478,6 +515,27 @@ function FeatureBranchPanel({ feature, project, onRefresh, onSelectTask }: { fea
             </button>
           )}
         </div>
+        {/* Shipping's live progress. Only while it runs: once it's done the
+            result note below says what landed, and a finished checklist would
+            just compete with it. */}
+        {busy === "ship" && (
+          <div className="fb-ship">
+            <div className="fb-ship-h">
+              <span className="spinner" />
+              We&apos;re working on shipping this…
+              <span className="fb-ship-el">{fmtDur(elapsed)}</span>
+            </div>
+            <div className="tpeek-todos">
+              {steps.map((s) => (
+                <div key={s.key} className={`tdo ${s.ms === undefined ? "in_progress" : "completed"}`}>
+                  <span className="tdo-box">{s.ms === undefined ? "▣" : "✔"}</span>
+                  <span className="tdo-txt">{s.label}</span>
+                  {s.ms !== undefined && <span className="fb-ship-ms">{fmtDur(s.ms)}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {/* Advisory, not a lock — the user may know these are abandoned. */}
         {info && info.unfinished.length > 0 && (
           <div className="fb-note">

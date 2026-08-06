@@ -4,7 +4,7 @@ import { createProject, createFeature, updateFeature, getFeature } from "@/lib/s
 import { createFeatureBranch, pushBranch, hasOrigin } from "@/lib/git";
 import { publishProjectBranch } from "@/lib/featureSync";
 import { POST as shipRoute } from "@/app/api/features/[id]/ship/route";
-import { git, makeRepo, commitFile, tmpDir } from "./helpers";
+import { git, makeRepo, commitFile, tmpDir, ndjson } from "./helpers";
 
 // Push-on-ship is the one step in the flow that leaves the machine, so it is
 // flagged off by default and — critically — can never fail the merge that
@@ -130,7 +130,8 @@ describe("the ship route publishes what it landed", () => {
     const res = await shipRoute(new Request("http://x?force=1", { method: "POST" }), {
       params: Promise.resolve({ id: feature.id }),
     });
-    const body = (await res.json()) as { ok: boolean; pushed: boolean; text: string };
+    // The ship route streams its progress; its answer is the final line.
+    const { result: body } = await ndjson<{ ok: boolean; pushed: boolean; text: string }>(res);
 
     expect(body.ok).toBe(true);
     expect(body.pushed).toBe(false);
@@ -144,7 +145,8 @@ describe("the ship route publishes what it landed", () => {
     const res = await shipRoute(new Request("http://x?force=1", { method: "POST" }), {
       params: Promise.resolve({ id: feature.id }),
     });
-    const body = (await res.json()) as { ok: boolean; pushed: boolean; text: string };
+    // The ship route streams its progress; its answer is the final line.
+    const { result: body } = await ndjson<{ ok: boolean; pushed: boolean; text: string }>(res);
 
     expect(body.ok).toBe(true);
     expect(body.pushed).toBe(true);
@@ -167,7 +169,8 @@ describe("the ship route publishes what it landed", () => {
     const res = await shipRoute(new Request("http://x?force=1", { method: "POST" }), {
       params: Promise.resolve({ id: feature.id }),
     });
-    const body = (await res.json()) as { ok: boolean; pushed: boolean; text: string };
+    // The ship route streams its progress; its answer is the final line.
+    const { result: body } = await ndjson<{ ok: boolean; pushed: boolean; text: string }>(res);
 
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);

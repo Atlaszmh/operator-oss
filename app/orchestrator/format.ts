@@ -184,6 +184,13 @@ export function waitedFor(since: number): string {
   const d = Math.round(h / 24);
   return `${d} day${d === 1 ? "" : "s"}`;
 }
+/** A raw millisecond span as "8s" / "1m 52s". Unlike duration() there's no
+ *  "active" sentinel — 0 is a real, renderable answer here (a clock that has
+ *  just started), which is exactly what a live counter shows on its first tick. */
+export function fmtDur(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
 export function duration(start: number, end: number | null): string {
   if (!end) return "active";
   const s = Math.max(0, Math.round((end - start) / 1000));

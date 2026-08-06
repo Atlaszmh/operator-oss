@@ -3,7 +3,7 @@ import { createProject, createFeature, updateFeature, getFeature, listFeatures }
 import { createFeatureBranch, landBranch } from "@/lib/git";
 import { syncFeaturesToBase, featuresToSync, summarizeSync } from "@/lib/featureSync";
 import { POST as shipRoute } from "@/app/api/features/[id]/ship/route";
-import { git, makeRepo, commitFile } from "./helpers";
+import { git, makeRepo, commitFile, ndjson } from "./helpers";
 
 // A project whose repo is a real git fixture, plus a feature on its own
 // integration branch forked from main.
@@ -235,7 +235,8 @@ describe("the ship route catches sibling features up", () => {
     const res = await shipRoute(new Request("http://x/api/features/x/ship?force=1", { method: "POST" }), {
       params: Promise.resolve({ id: shipping.id }),
     });
-    const body = (await res.json()) as { ok: boolean; text: string };
+    // The ship route streams its progress; its answer is the final line.
+    const { result: body } = await ndjson<{ ok: boolean; text: string }>(res);
 
     // The ship SUCCEEDED — another feature's branch is not this one's failure.
     expect(res.status).toBe(200);

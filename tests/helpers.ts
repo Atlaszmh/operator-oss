@@ -53,3 +53,26 @@ export async function makeRepoWithWorktree(ensureWorktree: (repoPath: string, ta
   if (!wt) throw new Error("ensureWorktree returned null in fixture");
   return { repo, taskId, wt };
 }
+
+/**
+ * Split a response that streams newline-delimited JSON (POST /ship).
+ *
+ * `result` is the LAST line — for the ship route that's the payload it used to
+ * answer with in one shot, so a caller that only wants the outcome reads that
+ * and ignores the progress steps. A non-2xx never streams (the route refuses
+ * before it starts working), so it comes back as the single line it is.
+ */
+export async function ndjson<T = Record<string, unknown>>(
+  res: Response
+): Promise<{ status: number; lines: Record<string, unknown>[]; result: T }> {
+  const body = await res.text();
+  if (res.status !== 200) {
+    const one = JSON.parse(body) as Record<string, unknown>;
+    return { status: res.status, lines: [one], result: one as T };
+  }
+  const lines = body
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+  return { status: res.status, lines, result: lines[lines.length - 1] as T };
+}
