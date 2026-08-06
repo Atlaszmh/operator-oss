@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { runFeatureGate, runTestsIn, clearTestCache } from "@/lib/gates";
 import { createFeatureBranch } from "@/lib/git";
@@ -71,6 +74,26 @@ describe("runFeatureGate", () => {
     const gate = await runFeatureGate(project, broken);
     expect(gate.ok).toBe(false);
     expect(gate.inconclusive).toBe(true);
+  }, 30_000);
+
+  // The ship route and autopilot's maybeOpenPr both gate the same feature, and
+  // the throwaway worktree path is derived from the feature id alone — so the
+  // second run's pre-add cleanup used to delete the tree the first run was still
+  // testing in, failing it wherever its suite next touched the filesystem.
+  it("shares one run when the same feature is gated twice at once", async () => {
+    const probe = path.join(os.tmpdir(), `orch-gate-probe-${uid()}`);
+    // Counts invocations, then proves the worktree still exists at the end.
+    const { repo, project, feature, branch } = await fixture(
+      `echo ran >> ${probe}; sleep 1; cat check.sh > /dev/null`
+    );
+    await git(repo, "checkout", "-q", branch);
+    await commitFile(repo, "check.sh", "exit 0\n", "green");
+    await git(repo, "checkout", "-q", "main");
+
+    const [a, b] = await Promise.all([runFeatureGate(project, feature), runFeatureGate(project, feature)]);
+    expect(a.ok).toBe(true);
+    expect(b).toEqual(a);
+    expect(fs.readFileSync(probe, "utf8").trim().split("\n")).toHaveLength(1);
   }, 30_000);
 
   it("leaves no worktree behind", async () => {

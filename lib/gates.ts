@@ -270,24 +270,47 @@ export interface FeatureGateResult {
  * not check" and "this is broken" are different claims, and only the second one
  * should read as the feature being at fault.
  */
+// Two callers gate the same feature — the ship route and autopilot's
+// maybeOpenPr — and the throwaway worktree is named `.tmp-gate-<featureId>`,
+// one deterministic path per feature. When both run at once the second one's
+// pre-add cleanup (withTempWorktree) deletes the directory the first one is
+// still testing in, and that run dies wherever its suite next touches the
+// filesystem: observed as cargo failing to spawn rustdoc with ENOENT after
+// every test had already passed, reported to the user as "this feature was not
+// shipped" while the other run shipped it. Sharing one in-flight run fixes the
+// race and skips a duplicate full test suite. On globalThis so dev HMR can't
+// hand two module instances two separate maps (same pattern as lib/events.ts).
+const inFlight: Map<string, Promise<FeatureGateResult>> =
+  ((globalThis as Record<string, unknown>).__orchFeatureGates as Map<string, Promise<FeatureGateResult>>) ??
+  ((globalThis as Record<string, unknown>).__orchFeatureGates = new Map());
+
 export async function runFeatureGate(project: Project, feature: Feature): Promise<FeatureGateResult> {
   const cmd = project.test_command?.trim();
   if (!cmd) return { ok: true, ran: false, output: "" };
   if (!feature.branch || !project.repo_path) return { ok: true, ran: false, output: "" };
 
-  try {
-    return await withTempWorktree(project.repo_path, feature.branch, `gate-${feature.id}`, async (dir) => {
-      const run = await runTestsIn(project, dir);
-      return { ok: run.ok, ran: run.ran, output: run.output };
-    });
-  } catch (e) {
-    return {
-      ok: false,
-      ran: false,
-      inconclusive: true,
-      output: `could not check out ${feature.branch} to test it: ${(e as Error).message}`,
-    };
-  }
+  const existing = inFlight.get(feature.id);
+  if (existing) return existing;
+
+  const run = (async () => {
+    try {
+      return await withTempWorktree(project.repo_path, feature.branch!, `gate-${feature.id}`, async (dir) => {
+        const r = await runTestsIn(project, dir);
+        return { ok: r.ok, ran: r.ran, output: r.output };
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        ran: false,
+        inconclusive: true,
+        output: `could not check out ${feature.branch} to test it: ${(e as Error).message}`,
+      };
+    } finally {
+      inFlight.delete(feature.id);
+    }
+  })();
+  inFlight.set(feature.id, run);
+  return run;
 }
 
 /** The message a failed feature gate should put in front of the user. */
