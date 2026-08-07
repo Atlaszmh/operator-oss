@@ -22,7 +22,7 @@
 - Modify: `lib/db.ts` (after the `task_dependencies` block, ~line 241; indexes ~line 283)
 - Modify: `lib/types.ts` (the `Feature` interface, ~line 40)
 
-- [ ] **Step 1: Add the table + indexes**
+- [x] **Step 1: Add the table + indexes**
 
 In `lib/db.ts`, directly after the `task_dependencies` CREATE block (after line 241), add:
 
@@ -48,7 +48,7 @@ And with the other indexes (~line 283):
     CREATE INDEX IF NOT EXISTS idx_feature_deps_dep ON feature_dependencies(depends_on_id);
 ```
 
-- [ ] **Step 2: Add `depends_on` to the Feature type**
+- [x] **Step 2: Add `depends_on` to the Feature type**
 
 In `lib/types.ts`, add to the `Feature` interface (after `sync_conflict`):
 
@@ -60,7 +60,7 @@ In `lib/types.ts`, add to the `Feature` interface (after `sync_conflict`):
   depends_on?: string[];
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add lib/db.ts lib/types.ts
@@ -73,7 +73,7 @@ git commit -m "feat: feature_dependencies table + Feature.depends_on type"
 - Modify: `lib/store.ts` (features section, after `setTaskDeps` patterns; `listFeatures` at ~line 318)
 - Test: `tests/featureDeps.test.ts` (new)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/featureDeps.test.ts`:
 
@@ -157,12 +157,12 @@ describe("featureDepsSatisfied", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run tests/featureDeps.test.ts`
 Expected: FAIL — `getFeatureDeps` etc. are not exported from `@/lib/store`.
 
-- [ ] **Step 3: Implement the store functions**
+- [x] **Step 3: Implement the store functions**
 
 In `lib/store.ts`, after `setTaskDeps` (~line 616) add — mirroring the task versions exactly:
 
@@ -265,14 +265,14 @@ Then in `listFeatures()` (~line 318), attach the edges the same way `listTasks` 
 
 (Replaces the existing `const pkey` + `return rows.map(...)` lines.)
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run tests/featureDeps.test.ts`
 Expected: PASS (all).
 Also run the neighbors: `npx vitest run tests/features.test.ts tests/autopilot.test.ts`
 Expected: PASS (no regressions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/store.ts tests/featureDeps.test.ts
@@ -288,7 +288,7 @@ git commit -m "feat: feature dependency store — setFeatureDeps, featureDepsSat
 - Modify: `app/api/features/[id]/approve-plan/route.ts` (becomes a thin wrapper)
 - Test: `tests/featureDeps.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/featureDeps.test.ts`:
 
@@ -427,12 +427,12 @@ describe("kickoffDependents", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run tests/featureDeps.test.ts`
 Expected: FAIL — `@/lib/approvePlan` does not exist.
 
-- [ ] **Step 3: Create `lib/approvePlan.ts`**
+- [x] **Step 3: Create `lib/approvePlan.ts`**
 
 ```ts
 // Gate 1 as a callable: the approve-plan treatment (cut the integration branch,
@@ -551,7 +551,7 @@ export async function kickoffDependents(featureId: string): Promise<KickoffResul
 }
 ```
 
-- [ ] **Step 4: Thin the approve-plan route**
+- [x] **Step 4: Thin the approve-plan route**
 
 Replace the body of `app/api/features/[id]/approve-plan/route.ts` with:
 
@@ -580,12 +580,12 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `npx vitest run tests/featureDeps.test.ts tests/autopilot.test.ts tests/autopilotRun.test.ts tests/features.test.ts`
 Expected: PASS. (If an approve-plan route test exists and asserts the flag-off 400, it still passes — the message is unchanged.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add lib/approvePlan.ts app/api/features/[id]/approve-plan/route.ts tests/featureDeps.test.ts
@@ -598,7 +598,7 @@ git commit -m "feat: extract approvePlan() + kickoffDependents() for feature cha
 - Modify: `app/api/features/[id]/ship/route.ts` (~line 108–147)
 - Modify: `lib/featureSync.ts` (`reconcileFeatureBranch`, ~line 370)
 
-- [ ] **Step 1: Ship route**
+- [x] **Step 1: Ship route**
 
 In `app/api/features/[id]/ship/route.ts`, import `kickoffDependents` and the result type:
 
@@ -634,7 +634,7 @@ Then extend the final result `text` (the `Shipped ${feature.name}...` template) 
 
 (declared just above the `send`), add `chained,` as a field next to `synced,`, and append `${chainNote}` to the non-alreadyMerged text branch at the very end — after `${published.note ? ` ${published.note}` : ""}`.
 
-- [ ] **Step 2: Heal path**
+- [x] **Step 2: Heal path**
 
 In `lib/featureSync.ts` `reconcileFeatureBranch`, the lost-stamp heal (~line 370) currently reads:
 
@@ -657,12 +657,12 @@ Change to:
       return;
 ```
 
-- [ ] **Step 3: Run the full suite**
+- [x] **Step 3: Run the full suite**
 
 Run: `npx vitest run`
 Expected: PASS across the board (ship/gate/sync tests unchanged in behavior — kickoff on a feature with no dependents is a no-row query).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/api/features/[id]/ship/route.ts lib/featureSync.ts
@@ -681,7 +681,7 @@ git commit -m "feat: kick off dependent features from both merged_at writers (sh
 - Modify: `app/api/internal/agent-tools/suggest-feature/route.ts`
 - Test: `tests/featureDeps.test.ts` (extend)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/featureDeps.test.ts`:
 
@@ -713,12 +713,12 @@ describe("suggest_feature after:", () => {
 
 (`createProject` returns a full `Project`, so no cast is needed.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `npx vitest run tests/featureDeps.test.ts`
 Expected: FAIL — `after` is not accepted / no dep written.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `lib/agentToolDefs.mjs` — add to `SUGGEST_FEATURE.params`:
 
@@ -819,12 +819,12 @@ and in the `createSuggestedFeature` call:
     after: Array.isArray(body.after) ? body.after.filter((x): x is string => typeof x === "string") : undefined,
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `npx vitest run tests/featureDeps.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/agentToolDefs.mjs lib/agentTools.ts lib/agents/claude/driver.ts scripts/orch-mcp.mjs app/api/internal/agent-tools/suggest-feature/route.ts tests/featureDeps.test.ts
@@ -841,7 +841,7 @@ git commit -m "feat: suggest_feature after: — planners can chain features"
 - Modify: `app/Orchestrator.tsx` (~line 247 — pass `features` to FeatureLanding)
 - Modify: `app/orchestrator/TasksColumn.tsx` (`FeatureGroupHeader` badge)
 
-- [ ] **Step 1: PATCH route**
+- [x] **Step 1: PATCH route**
 
 In `app/api/features/[id]/route.ts`, import `setFeatureDeps` from `@/lib/store`, and after the `name` handling (before `updateFeature`):
 
@@ -859,7 +859,7 @@ In `app/api/features/[id]/route.ts`, import `setFeatureDeps` from `@/lib/store`,
   }
 ```
 
-- [ ] **Step 2: Client type + saveFeature**
+- [x] **Step 2: Client type + saveFeature**
 
 `app/orchestrator/types.ts` — add to `FeatureRow` (after `sync_conflict`):
 
@@ -875,7 +875,7 @@ In `app/api/features/[id]/route.ts`, import `setFeatureDeps` from `@/lib/store`,
   const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived" | "depends_on">> & { force?: boolean }) => {
 ```
 
-- [ ] **Step 3: FeatureLanding — picker + display**
+- [x] **Step 3: FeatureLanding — picker + display**
 
 `app/Orchestrator.tsx` (~line 252) — pass the full feature list:
 
@@ -941,7 +941,7 @@ In `app/api/features/[id]/route.ts`, import `setFeatureDeps` from `@/lib/store`,
             })()}
 ```
 
-- [ ] **Step 4: Group header badge**
+- [x] **Step 4: Group header badge**
 
 `app/orchestrator/TasksColumn.tsx`:
 - `FeatureGroup` and `FeatureGroupHeader` both gain an optional `afterNames?: string[]` prop, passed straight through.
@@ -971,12 +971,12 @@ In `app/api/features/[id]/route.ts`, import `setFeatureDeps` from `@/lib/store`,
 
 (place beside the existing `featureIds` computation) and pass `afterNames={afterNamesFor(f)}`.
 
-- [ ] **Step 5: Build + full suite**
+- [x] **Step 5: Build + full suite**
 
 Run: `npx vitest run` — Expected: PASS.
 Run: `npx next build` (or the repo's build script from package.json) — Expected: compiles clean, type errors none.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/api/features/[id]/route.ts app/orchestrator/types.ts app/orchestrator/useOrchestrator.ts app/orchestrator/FeatureLanding.tsx app/Orchestrator.tsx app/orchestrator/TasksColumn.tsx
@@ -989,13 +989,13 @@ git commit -m "feat: feature chain editing (PATCH depends_on) + after: badges in
 - Modify: `CLAUDE.md` (if it documents the feature layer — one line on chaining)
 - Modify: `.env.example` — no new flags, skip unless a features doc exists.
 
-- [ ] **Step 1:** Grep `CLAUDE.md` for the feature/autopilot section; add one line: chaining = `feature_dependencies` + `lib/approvePlan.ts`, kickoff fires from ship + heal. Skip if no such section exists.
-- [ ] **Step 2:** Commit if changed.
+- [x] **Step 1:** Grep `CLAUDE.md` for the feature/autopilot section; add one line: chaining = `feature_dependencies` + `lib/approvePlan.ts`, kickoff fires from ship + heal. Skip if no such section exists.
+- [x] **Step 2:** Commit if changed.
 
 ---
 
 ## Verification (whole plan)
 
-- [ ] `npx vitest run` — full suite green.
-- [ ] Build passes.
-- [ ] Manual sanity path (optional, needs `ORCH_FEATURE_AUTOPILOT=1`): create features A→B with a dep, approve A, ship A (or stamp `merged_at` via ship), observe B armed with a fresh branch.
+- [x] `npx vitest run` — full suite green.
+- [x] Build passes.
+- [x] Manual sanity path (optional, needs `ORCH_FEATURE_AUTOPILOT=1`): create features A→B with a dep, approve A, ship A (or stamp `merged_at` via ship), observe B armed with a fresh branch.
