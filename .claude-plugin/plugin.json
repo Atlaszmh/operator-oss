@@ -2,7 +2,7 @@
   "name": "operator",
   "description": "Work with Operator from any Claude Code session — plan here, hand off to your Operator instance to build: features, tasks, dependencies, models, and thinking levels filed over its local REST API.",
   "version": "0.1.0",
-  "author": { "name": "iishyfishyy" },
-  "repository": "https://github.com/iishyfishyy/operator-oss",
+  "author": { "name": "Atlaszmh" },
+  "repository": "https://github.com/Atlaszmh/operator-oss",
   "license": "Apache-2.0"
 }

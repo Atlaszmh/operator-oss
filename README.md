@@ -127,7 +127,7 @@ running queue.
 Install it in Claude Code:
 
 ```
-/plugin marketplace add iishyfishyy/operator-oss
+/plugin marketplace add Atlaszmh/operator-oss
 /plugin install operator@operator
 ```
 
