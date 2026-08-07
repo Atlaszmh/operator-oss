@@ -61,7 +61,9 @@ import {
   getFeature,
   getTask,
   setTaskDeps,
+  updateTask,
 } from "@/lib/store";
+import { publishGlobal } from "@/lib/events";
 
 beforeEach(() => {
   gateMock.mockReset();
@@ -144,6 +146,28 @@ describe("autopilot scheduler", () => {
     await sweep(project.id);
     expect(launchedIds()).toEqual([tasks[0].id]);
   });
+
+  // The unblock signal. A dependency can stop blocking without any turn ending —
+  // a status set by hand, a cancel, or autopilot's own land() publishing a member
+  // as merged from a feature this pass had already walked. Only turn_end woke the
+  // scheduler, so those dependents sat until the 60s heartbeat noticed work that
+  // had been ready all along.
+  it("starts a dependent as soon as its blocker is marked done, with no sweep of its own", async () => {
+    const { project, tasks } = await planFixture(2);
+    setTaskDeps(tasks[1].id, [tasks[0].id]);
+    // Parked so the blocker is never launched by the sweep below — the only
+    // thing that may start tasks[1] is the completion signal.
+    updateTask(tasks[0].id, { status: "on_hold" });
+    ensureAutopilot();
+    await sweep(project.id);
+    expect(launchedIds()).toEqual([]);
+
+    // Exactly what PATCH /api/tasks/[id] and land() do, and nothing else.
+    updateTask(tasks[0].id, { status: "done" });
+    publishGlobal(tasks[0].id, { type: "task_updated" });
+
+    await vi.waitFor(() => expect(launchedIds()).toEqual([tasks[1].id]), { timeout: 5_000 });
+  }, 15_000);
 
   it("merges a passing task into the feature branch and marks it done", async () => {
     const { repo, project, feature, tasks } = await planFixture(1);
@@ -257,7 +281,15 @@ describe("autopilot scheduler", () => {
       feature_id: feature.id,
       suggested: true,
     });
-    gateMock.mockImplementation(() => new Promise(() => {}));
+    // Park the TURN, not the gate: accepting a suggestion publishes task_updated,
+    // which marks the project dirty and makes sweep() loop once more — a gate
+    // mock that never resolves would hang that second pass forever, and with it
+    // the await below. A turn that never ends parks the member just as firmly
+    // (it is never settled, so it is never gated) without blocking the sweep.
+    runTurnMock.mockImplementation(async function* (task: { id: string }) {
+      yield { type: "session", sessionId: `s-${task.id}` };
+      await new Promise(() => {});
+    });
 
     await sweep(project.id);
 

@@ -52,6 +52,14 @@ import type { Feature, Project, Task } from "./types";
  */
 export const GATE_STALL_MS = GATE_TEST_TIMEOUT_MS * 3;
 
+/**
+ * How many times one sweep may re-loop on its own dirty flag before handing the
+ * rest to the next sweep. Generous — a legitimate chain (a member lands, its
+ * dependent starts, that one lands) re-loops a handful of times — and only ever
+ * reached by a pass that keeps re-dirtying the project without making progress.
+ */
+const MAX_SWEEP_PASSES = 12;
+
 declare global {
   // eslint-disable-next-line no-var
   var __orchAutopilot: { armed: boolean; running: Set<string>; again: Set<string> } | undefined;
@@ -76,14 +84,34 @@ export function ensureAutopilot(): void {
   if (st.armed) return;
   st.armed = true;
   subscribeGlobal((taskId, ev) => {
-    if ((ev as { type?: string }).type !== "turn_end") return;
-    const task = getTask(taskId);
+    // Every event that can leave a dependent ready, not just turn_end.
+    //
+    // turn_end is the usual one. But a task stops blocking its dependents on
+    // three OTHER events that were all being dropped here: a status set to done
+    // or cancelled by hand, a hard delete (task_dependencies is ON DELETE
+    // CASCADE, so deleting a blocker really does unblock what it blocked), and
+    // — the expensive one — land()'s own task_updated when autopilot merges a
+    // member. sweepOnce walks a project's features in order, so a task landing
+    // in feature 3 cannot reach a dependent sitting in feature 1: that feature's
+    // pass already happened this sweep. Nothing marked the project dirty, the
+    // pass ended, and the dependent waited on the 60s heartbeat to be told about
+    // work that had been ready since the merge.
+    //
+    // Sweeping on these makes the in-flight pass loop once more (sweep()'s
+    // `again` set) — which IS the "your blocker is done" signal, delivered at
+    // the moment the blocker finished rather than at the next tick. Bounded: a
+    // pass with nothing left to do publishes nothing, so the loop stops.
+    const type = (ev as { type?: string }).type;
+    if (type !== "turn_end" && type !== "task_updated" && type !== "task_deleted") return;
+    // A deleted task has no row left to read, so the event carries its project.
+    const projectId =
+      type === "task_deleted" ? (ev as { projectId: string }).projectId : getTask(taskId)?.project_id;
     // Any turn can be the one that files new work, not just a member's: a
     // planning task is normally ungrouped, and its suggest_task calls are
     // exactly what an armed feature is waiting for. Filtering on feature_id
     // meant a plan landed in the tray and nothing came to collect it. A sweep
     // for a project with no armed feature is one indexed query and a return.
-    if (task) void sweep(task.project_id).catch(() => {});
+    if (projectId) void sweep(projectId).catch(() => {});
   });
 }
 
@@ -106,10 +134,22 @@ export async function sweep(projectId: string): Promise<void> {
   // between two tasks of a running plan.
   workStarted();
   try {
+    // The re-loop is bounded because a pass can now dirty its OWN project:
+    // autopilot's mutations publish task_updated for the UI, and that publish is
+    // also the signal that tells dependents their blocker is done. Most re-loops
+    // are exactly what we want. But a pass that isn't idempotent re-dirties the
+    // project every time — maybeOpenPr re-escalating a feature gate that keeps
+    // failing spun here 10k+ times — so cap it and let the heartbeat own whatever
+    // is still outstanding. Never silently: a project that hits the cap says so.
+    let passes = 1;
     do {
       st.again.delete(projectId);
       await sweepOnce(projectId);
-    } while (st.again.has(projectId));
+    } while (st.again.has(projectId) && passes++ < MAX_SWEEP_PASSES);
+    if (st.again.has(projectId))
+      console.warn(
+        `[autopilot] project ${projectId} was still dirty after ${MAX_SWEEP_PASSES} passes — leaving the rest to the next sweep`
+      );
   } finally {
     st.running.delete(projectId);
     st.again.delete(projectId);
@@ -458,6 +498,12 @@ function note(task: Task, text: string): void {
  * route): answering it IS how you resume it.
  */
 function block(task: Task, reason: string): void {
+  // Idempotent. A task already escalated for this exact reason gains nothing from
+  // being escalated again — it just gets a duplicate transcript line — and since
+  // the publish below is a scheduling signal, re-blocking would re-dirty the
+  // project on every pass. maybeOpenPr re-escalates a failing feature gate on
+  // each pass, which is precisely that loop.
+  if (getTask(task.id)?.blocked_reason === reason) return;
   updateTask(task.id, { blocked_reason: reason, awaiting_input: 1, running: 0 });
   note(task, `⏸ Autopilot stopped here.\n\n${reason}`);
   publishGlobal(task.id, { type: "task_updated" });
