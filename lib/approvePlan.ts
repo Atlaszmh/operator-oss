@@ -97,7 +97,12 @@ export async function kickoffDependents(featureId: string): Promise<KickoffResul
   const results: KickoffResult[] = [];
   for (const depId of getFeatureDependents(featureId)) {
     const f = getFeature(depId);
-    if (!f || f.archived || f.autopilot) continue;
+    // merged_at too, not just archived: shipping sets both, but Restore clears
+    // only `archived` — a shipped feature the user restored (to file a
+    // follow-up) with a leftover chain edge must not be silently re-armed and
+    // auto-started when that edge's predecessor ships. Guarded here rather
+    // than in approvePlan so a deliberate manual re-approve still works.
+    if (!f || f.archived || f.autopilot || f.merged_at > 0) continue;
     if (!featureDepsSatisfied(f.id)) continue;
     const project = getProject(f.project_id);
     if (!project) continue;

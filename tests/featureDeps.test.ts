@@ -192,6 +192,18 @@ describe("kickoffDependents", () => {
     expect(getFeature(b.id)!.autopilot).toBe(0);
   });
 
+  it("skips a dependent that already shipped (restored after ship)", async () => {
+    const { project, feature: a } = await armFixture();
+    const restored = createFeature({ project_id: project.id, name: `SH-${uid()}` });
+    // Shipped earlier, then restored: merged_at set, archived back to 0 — the
+    // state Restore leaves behind. A leftover chain edge must not re-arm it.
+    updateFeature(restored.id, { merged_at: Date.now() });
+    setFeatureDeps(restored.id, [a.id]);
+    updateFeature(a.id, { merged_at: Date.now() });
+    expect(await kickoffDependents(a.id)).toEqual([]);
+    expect(getFeature(restored.id)!.autopilot).toBe(0);
+  });
+
   it("orphan: deleting the predecessor leaves the dependent dormant", async () => {
     const { project, feature: a } = await armFixture();
     const b = createFeature({ project_id: project.id, name: `OR-${uid()}` });
