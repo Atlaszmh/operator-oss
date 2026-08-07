@@ -1,15 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createProject,
   createFeature,
+  createTask,
+  deleteFeature,
+  getFeature,
+  getTask,
   updateFeature,
+  updateProject,
   listFeatures,
   getFeatureDeps,
   getFeatureDependents,
   setFeatureDeps,
   featureDepsSatisfied,
 } from "@/lib/store";
-import { uid } from "./helpers";
+import { approvePlan, kickoffDependents } from "@/lib/approvePlan";
+import { makeRepo, uid } from "./helpers";
+
+// approvePlan arms the controller and kicks a detached sweep — real scheduling
+// that would spawn actual agent turns from a unit test (driveFeature step 2 →
+// startInitialTurn → the real driver). Mock the two entry points; the
+// controller's own wiring is pinned by tests/autopilotRun.test.ts.
+vi.mock("@/lib/autopilot", () => ({ ensureAutopilot: vi.fn(), sweep: vi.fn().mockResolvedValue(undefined) }));
 
 /** A project plus n features, freshly created. */
 function fixture(n: number) {
@@ -73,5 +85,127 @@ describe("featureDepsSatisfied", () => {
   it("no deps = satisfied", () => {
     const { fs: [a] } = fixture(1);
     expect(featureDepsSatisfied(a.id)).toBe(true);
+  });
+});
+
+// approvePlan reads ORCH_FEATURE_AUTOPILOT at call time (lib/features.ts).
+let savedFlag: string | undefined;
+beforeEach(() => {
+  savedFlag = process.env.ORCH_FEATURE_AUTOPILOT;
+  process.env.ORCH_FEATURE_AUTOPILOT = "1";
+});
+afterEach(() => {
+  if (savedFlag === undefined) delete process.env.ORCH_FEATURE_AUTOPILOT;
+  else process.env.ORCH_FEATURE_AUTOPILOT = savedFlag;
+});
+
+/** Project on a real repo + one feature with one suggested member. */
+async function armFixture() {
+  const repo = await makeRepo();
+  const project = updateProject(createProject({ name: `AP-${uid()}` }).id, { repo_path: repo, branch: "main" })!;
+  const feature = createFeature({ project_id: project.id, name: `APF-${uid()}` });
+  const task = createTask({ project_id: project.id, title: "member", feature_id: feature.id, suggested: true });
+  return { project, feature, task };
+}
+
+describe("approvePlan", () => {
+  it("cuts the branch, accepts suggestions, and arms", async () => {
+    const { project, feature, task } = await armFixture();
+    const res = await approvePlan(feature, project);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.outcome).toBe("did-work");
+    const f = getFeature(feature.id)!;
+    expect(f.autopilot).toBe(1);
+    expect(f.branch).not.toBe("");
+    expect(getTask(task.id)!.suggested).toBe(0);
+  });
+
+  it("no-ops when ORCH_FEATURE_AUTOPILOT is off", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT = "0";
+    const { project, feature } = await armFixture();
+    const res = await approvePlan(feature, project);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.outcome).toBe("flag-off");
+    expect(getFeature(feature.id)!.autopilot).toBe(0);
+  });
+
+  it("skips entirely only when already armed; a pre-existing branch skips only the cut", async () => {
+    const { project, feature, task } = await armFixture();
+    // Pre-existing branch (e.g. cut via POST /branch): still accepts + arms.
+    updateFeature(feature.id, { branch: "feature/pre-cut" });
+    const res = await approvePlan(getFeature(feature.id)!, project);
+    expect(res.ok && res.outcome === "did-work").toBe(true);
+    const f = getFeature(feature.id)!;
+    expect(f.branch).toBe("feature/pre-cut"); // not re-cut
+    expect(f.autopilot).toBe(1);
+    expect(getTask(task.id)!.suggested).toBe(0);
+    // Already armed: skip everything.
+    const again = await approvePlan(getFeature(feature.id)!, project);
+    expect(again.ok && again.outcome === "already-armed").toBe(true);
+  });
+});
+
+describe("kickoffDependents", () => {
+  it("arms a dependent only when ALL its deps have shipped", async () => {
+    const { project, feature: a } = await armFixture();
+    const b = createFeature({ project_id: project.id, name: `B-${uid()}` });
+    const c = createFeature({ project_id: project.id, name: `C-${uid()}` });
+    createTask({ project_id: project.id, title: "b work", feature_id: b.id, suggested: true });
+    setFeatureDeps(c.id, [a.id, b.id]); // diamond tail: c waits on both
+    setFeatureDeps(b.id, [a.id]);
+
+    updateFeature(a.id, { merged_at: Date.now(), archived: 1 }); // a ships
+    const kicked = await kickoffDependents(a.id);
+    expect(kicked.map((k) => k.featureId)).toEqual([b.id]); // c's deps not all shipped
+    expect(getFeature(b.id)!.autopilot).toBe(1);
+    expect(getFeature(c.id)!.autopilot).toBe(0);
+
+    updateFeature(b.id, { merged_at: Date.now(), archived: 1 }); // b ships
+    const kicked2 = await kickoffDependents(b.id);
+    expect(kicked2.map((k) => k.featureId)).toEqual([c.id]);
+    expect(getFeature(c.id)!.autopilot).toBe(1);
+  });
+
+  it("skips archived and already-armed dependents; idempotent on double ship", async () => {
+    const { project, feature: a } = await armFixture();
+    const armed = createFeature({ project_id: project.id, name: `AR-${uid()}` });
+    const parked = createFeature({ project_id: project.id, name: `PK-${uid()}` });
+    updateFeature(armed.id, { autopilot: 1, branch: "feature/already" });
+    updateFeature(parked.id, { archived: 1 });
+    setFeatureDeps(armed.id, [a.id]);
+    setFeatureDeps(parked.id, [a.id]);
+
+    updateFeature(a.id, { merged_at: Date.now() });
+    expect(await kickoffDependents(a.id)).toEqual([]); // both skipped
+    expect(await kickoffDependents(a.id)).toEqual([]); // double ship: still nothing
+    expect(getFeature(armed.id)!.branch).toBe("feature/already"); // untouched
+  });
+
+  it("does nothing when the flag is off", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT = "0";
+    const { project, feature: a } = await armFixture();
+    const b = createFeature({ project_id: project.id, name: `FB-${uid()}` });
+    setFeatureDeps(b.id, [a.id]);
+    updateFeature(a.id, { merged_at: Date.now() });
+    expect(await kickoffDependents(a.id)).toEqual([]);
+    expect(getFeature(b.id)!.autopilot).toBe(0);
+  });
+
+  it("orphan: deleting the predecessor leaves the dependent dormant", async () => {
+    const { project, feature: a } = await armFixture();
+    const b = createFeature({ project_id: project.id, name: `OR-${uid()}` });
+    setFeatureDeps(b.id, [a.id]);
+    deleteFeature(a.id); // cascade removes the edge; no ship event ever fires
+    expect(getFeatureDeps(b.id)).toEqual([]);
+    expect(getFeature(b.id)!.autopilot).toBe(0);
+  });
+
+  it("an edge created after its dep already shipped stays dormant", async () => {
+    const { project, feature: a } = await armFixture();
+    updateFeature(a.id, { merged_at: Date.now() }); // shipped before the edge existed
+    const b = createFeature({ project_id: project.id, name: `LA-${uid()}` });
+    setFeatureDeps(b.id, [a.id]); // must NOT arm as a side effect
+    expect(getFeature(b.id)!.autopilot).toBe(0);
+    expect(featureDepsSatisfied(b.id)).toBe(true); // informational edge — kickoff only fires on ship/heal
   });
 });
