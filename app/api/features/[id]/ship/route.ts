@@ -4,6 +4,7 @@ import { mergeFeature } from "@/lib/git";
 import { syncFeaturesToBase, summarizeSync, publishProjectBranch } from "@/lib/featureSync";
 import { runFeatureGate, featureGateFailure } from "@/lib/gates";
 import { resolveFeatures } from "@/lib/features";
+import { kickoffDependents, type KickoffResult } from "@/lib/approvePlan";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 900;
@@ -121,6 +122,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             );
         const syncNote = summarizeSync(synced);
 
+        // Feature chaining: this landing may be what a dependent was waiting
+        // for. Cut its branch NOW — from a base that already contains this
+        // feature's work — and arm it. One announced line per kicked-off
+        // dependent so the chain is visible in the ship log; a failure is that
+        // dependent's problem, never the ship's.
+        let chained: KickoffResult[] = [];
+        if (!res.alreadyMerged) {
+          chained = await kickoffDependents(feature.id);
+          for (const k of chained) {
+            send({ type: "step", key: `chain-${k.featureId}`, label: k.ok ? `Kicked off ${k.name}` : `Couldn't kick off ${k.name}: ${k.error}` });
+            send({ type: "step_done", key: `chain-${k.featureId}`, ms: 0 });
+          }
+        }
+
         // Publish what landed, when the instance is configured to (off by
         // default). After the local catch-ups: a push that hangs must not delay
         // reconciling the branches this merge just moved underneath. The step is
@@ -134,16 +149,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         const tail = unfinished.length
           ? ` ${unfinished.length} task${unfinished.length === 1 ? " is" : "s are"} still unfinished, so only work already merged into ${feature.branch} landed.`
           : "";
+        const chainNote = chained.filter((k) => k.ok).length
+          ? ` Kicked off ${chained.filter((k) => k.ok).map((k) => k.name).join(", ")}.`
+          : "";
         send({
           type: "result",
           ok: true,
           alreadyMerged: !!res.alreadyMerged,
           synced,
+          chained,
           pushed: published.pushed,
           text: res.alreadyMerged
             ? `${feature.branch} was already merged into ${res.targetBranch}.`
             : `Shipped ${feature.name}: merged ${feature.branch} into ${res.targetBranch}.${tail}` +
-              `${syncNote ? ` ${syncNote}` : ""}${published.note ? ` ${published.note}` : ""}`,
+              `${syncNote ? ` ${syncNote}` : ""}${published.note ? ` ${published.note}` : ""}${chainNote}`,
         });
       } catch (e) {
         // A throw past this point has already committed a 200, so the only way

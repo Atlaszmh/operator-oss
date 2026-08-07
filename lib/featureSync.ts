@@ -368,6 +368,13 @@ export async function reconcileFeatureBranch(project: Project, f: FeatureWithCou
       const cur = getFeature(f.id);
       if (!cur || cur.merged_at !== 0 || cur.branch !== f.branch || cur.base_sha !== f.base_sha) return;
       updateFeature(f.id, { merged_at: Date.now(), sync_conflict: "" });
+      // The stamp IS the ship event for chaining purposes — without this, a
+      // healed predecessor stalls its chain silently while the UI shows every
+      // dep shipped. Dynamic import: featureSync ← autopilot ← (this heal) would
+      // otherwise be a static cycle. Never throws (kickoffDependents guarantees
+      // it), and the enclosing try swallows a failed import with the rest.
+      const { kickoffDependents } = await import("./approvePlan");
+      await kickoffDependents(f.id);
       return;
     }
 
