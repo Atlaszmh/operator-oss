@@ -1,0 +1,11 @@
+{
+  "name": "operator",
+  "owner": { "name": "iishyfishyy" },
+  "plugins": [
+    {
+      "name": "operator",
+      "source": ".",
+      "description": "Plan in Claude Code, hand off to Operator: files the feature, tasks, dependencies, models, and thinking levels into your running instance, ready to approve."
+    }
+  ]
+}

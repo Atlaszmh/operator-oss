@@ -113,6 +113,32 @@ Pass, and the task merges into the integration branch and the next one starts. F
 
 Autopilot never merges to your project branch, and it's per-feature — nothing you haven't approved runs.
 
+## Plan in Claude Code, hand off to Operator
+
+This repo doubles as a **Claude Code plugin** shipping one skill, `operator-handoff`: plan
+a feature in an ordinary Claude Code session — in your project, with all your context —
+then say *"hand this off to Operator"* and the session files the whole plan into your
+instance over its REST API: the feature (spec into the context every member task
+inherits), tasks as suggestions with self-contained briefs, dependency edges, and a model +
+thinking level per task picked from what your instance actually offers. It ends by
+offering **Approve plan**, so an autopilot instance goes straight from conversation to
+running queue.
+
+Install it in Claude Code:
+
+```
+/plugin marketplace add iishyfishyy/operator-oss
+/plugin install operator@operator
+```
+
+(or copy `skills/operator-handoff/` into `~/.claude/skills/`).
+
+Configuration is two env vars where Claude Code runs: `OPERATOR_URL` (default
+`http://localhost:3000`; Docker installs typically `http://localhost:10001`), and — only
+for instances behind Cloudflare Access — `OPERATOR_CF_ACCESS_CLIENT_ID` /
+`OPERATOR_CF_ACCESS_CLIENT_SECRET` holding a CF Access service token permitted by your
+Access policy, with `OPERATOR_URL` set to the tunnel hostname.
+
 ## Managed services
 
 Give a project `dev` / `setup` / `test` commands in its context editor (⚙) and the

@@ -117,6 +117,7 @@ This is the **open-source repo** — the whole local app lives here and all core
 - **Delete is hard delete** throughout — no soft-delete/undo.
 - **Auth is layered on purpose**: Next middleware for HTTP, `server.js` for WebSocket upgrades, per-service visibility for public service hostnames. When adding a route or upgrade path, decide which gate covers it.
 - **Commits are detailed** (explain the why); **keep README.md current** with app state when behavior changes. Markdown tables use minimal separators (`|-|-|`).
+- **`skills/operator-handoff/SKILL.md` hardcodes the handoff API recipe** (`/api/projects`, `/api/features`, `/api/tasks` request shapes, `features.context` semantics, `suggested`/`depends_on` behavior). It ships to users via `.claude-plugin/` — update it when those contracts change, same rule as README.
 
 ## More detail
 
