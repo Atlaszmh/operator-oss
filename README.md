@@ -105,6 +105,8 @@ Approving covers the work that arrives *later*, too: anything suggested into an 
 
 Pass, and the task merges into the integration branch and the next one starts. Fail, and the reviewer's notes go straight back to the task as its next turn — twice by default (`ORCH_AUTOPILOT_ATTEMPTS`), then it stops and asks you. A merge conflict goes to the task's own agent to resolve, same as the manual flow.
 
+The queue never idles behind its own bookkeeping: a task whose dependencies have landed starts immediately, even while other tasks are still being gated, and when several tasks finish together their gates run in parallel (merges stay serial). Every start, gate, and merge logs its duration, so a slow queue is diagnosable from the server logs.
+
 **You merge the PR.** When the last task lands, the integration branch is pushed and a PR opened against your project branch, its body assembled from the approved spec and every task's outcome line. Review it on GitHub, where CI and your review tools already live.
 
 **When it gets stuck**, the task shows up in the "N need you" pill you already watch, with the reason in full on the feature page. Reply to it — answering clears the block and it picks the task back up. A stuck task never stalls its siblings; only work that depended on it waits.

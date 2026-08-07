@@ -121,7 +121,10 @@ describe("test result cache", () => {
     const first = await runTestsIn(project, repo);
     const second = await runTestsIn(project, repo);
     expect(first.ok).toBe(true);
-    expect(second).toEqual(first); // served from cache, byte for byte
+    expect(first.cached).toBeUndefined(); // the run that actually ran
+    // Served from cache, byte for byte — and marked as such, so the gate's
+    // timing log can say "(cached)" instead of reporting a 0.0s suite.
+    expect(second).toEqual({ ...first, cached: true });
   }, 30_000);
 
   it("does not reuse across a commit", async () => {

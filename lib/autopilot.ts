@@ -41,7 +41,7 @@ import { hasTurn } from "./abort";
 import { workStarted, workEnded } from "./idle";
 import { resolveFeatures } from "./features";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS, GATE_TEST_TIMEOUT_MS } from "./config";
-import type { Feature, Project, Task } from "./types";
+import type { Feature, GateVerdict, Project, Task } from "./types";
 
 /**
  * How long a task may sit with a gate that can't reach a verdict before
@@ -141,6 +141,7 @@ export async function sweep(projectId: string): Promise<void> {
     // project every time — maybeOpenPr re-escalating a feature gate that keeps
     // failing spun here 10k+ times — so cap it and let the heartbeat own whatever
     // is still outstanding. Never silently: a project that hits the cap says so.
+    const t0 = Date.now();
     let passes = 1;
     do {
       st.again.delete(projectId);
@@ -150,6 +151,10 @@ export async function sweep(projectId: string): Promise<void> {
       console.warn(
         `[autopilot] project ${projectId} was still dirty after ${MAX_SWEEP_PASSES} passes — leaving the rest to the next sweep`
       );
+    // Only slow sweeps log — the no-op sweep that follows every event on every
+    // project is single-digit milliseconds and would be pure noise.
+    const took = Date.now() - t0;
+    if (took > 1000) console.log(`[autopilot] sweep of project ${projectId}: ${passes} pass(es) in ${(took / 1000).toFixed(1)}s`);
   } finally {
     st.running.delete(projectId);
     st.again.delete(projectId);
@@ -190,26 +195,49 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
     publishGlobal(t.id, { type: "task_updated" });
   }
 
-  // 1. Gate everything that finished a turn and is now sitting on the user.
-  for (const t of featureMembers(feature.id)) {
-    if (!isSettledForGating(t)) continue;
-    await gateAndLand(project, feature, t);
-  }
-
-  // 2. Start ready members, up to the cap. Re-read: step 1 moved rows.
-  const live = featureMembers(feature.id).filter((t) => t.running || hasTurn(t.id)).length;
+  // 1. Start ready members FIRST, up to the cap. Starting is the cheap half
+  //    (claim + worktree + title); the gates below are minutes of tests plus a
+  //    reviewer turn, and they used to run ahead of this — so a task whose
+  //    blocker landed on a PREVIOUS pass sat startable behind every other
+  //    member's gate (measured on a real queue: 16 minutes of dead air with
+  //    free slots the whole time). A blocker that lands in THIS pass's gate
+  //    step re-dirties the project, so its dependents start on the re-loop
+  //    seconds later, not behind the next heartbeat.
+  //
+  //    Settled members count as live: each is mid-pipeline, and a failed gate
+  //    becomes a feedback turn, so ignoring them would overshoot the cap by
+  //    one per failure.
+  const live = featureMembers(feature.id).filter((t) => t.running || hasTurn(t.id) || isSettledForGating(t)).length;
   let slots = Math.max(0, AUTOPILOT_CONCURRENCY - live);
   for (const t of readyMembers(feature.id)) {
     if (slots <= 0) break;
-    // A started task belongs to the gating path above, not to launching.
+    // A started task belongs to the gating path below, not to launching.
     if (t.started) continue;
     const res = await startInitialTurn(t, project);
     if (!res.ok && res.status !== 409) {
       block(t, `Autopilot could not start this task: ${res.error}`);
       continue;
     }
+    console.log(`[autopilot] started task ${t.id} "${t.title}"`);
     slots--;
   }
+
+  // 2. Gate everything that finished a turn — in parallel: each gate is that
+  //    task's own worktree suite plus its own reviewer one-shot, so they share
+  //    nothing, and serial gates were the sweep's whole wall-clock whenever two
+  //    members finished together. Landing stays serial: every merge targets
+  //    the same integration branch.
+  const settled = featureMembers(feature.id).filter(isSettledForGating);
+  const gated = await Promise.all(
+    settled.map(async (t) => {
+      const t0 = Date.now();
+      const verdict = await runGate(t, project, feature);
+      const word = verdict.inconclusive ? "inconclusive" : verdict.ok ? "pass" : "fail";
+      console.log(`[autopilot] gate for task ${t.id}: ${word} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      return [t, verdict] as const;
+    })
+  );
+  for (const [t, verdict] of gated) await applyVerdict(project, feature, t, verdict);
 
   // 3. Everything landed → hand the feature back to the user as a PR.
   await maybeOpenPr(project, feature);
@@ -240,13 +268,13 @@ function isSettledForGating(t: Task): boolean {
 }
 
 /**
- * Gate one finished task and, if it passes, land it. A failure is a follow-up
- * turn rather than an error: the task keeps its session and is told what to fix,
- * which is what a human reviewer would have done with the same finding.
+ * Act on one finished task's gate verdict and, if it passed, land it. A failure
+ * is a follow-up turn rather than an error: the task keeps its session and is
+ * told what to fix, which is what a human reviewer would have done with the
+ * same finding. (The gate itself ran in driveFeature's parallel step — this
+ * half is serial because landings share the integration branch.)
  */
-async function gateAndLand(project: Project, feature: Feature, task: Task): Promise<void> {
-  const verdict = await runGate(task, project, feature);
-
+async function applyVerdict(project: Project, feature: Feature, task: Task, verdict: GateVerdict): Promise<void> {
   // The gate reached no verdict about the work — the reviewer itself couldn't
   // run (usage limit, no connected utility agent, a turn that died). Leave the
   // task exactly as it is: no attempt charged, no turn sent, still settled, so
@@ -275,6 +303,7 @@ async function gateAndLand(project: Project, feature: Feature, task: Task): Prom
       return;
     }
     updateTask(task.id, { gate_attempts: attempts });
+    console.log(`[autopilot] gate failed for task ${task.id} (attempt ${attempts}/${AUTOPILOT_ATTEMPTS}) — sending feedback turn`);
     await sendTurn(project, task, verdict.feedback);
     return;
   }
@@ -294,6 +323,7 @@ async function gateAndLand(project: Project, feature: Feature, task: Task): Prom
 }
 
 async function land(project: Project, feature: Feature, task: Task): Promise<void> {
+  const t0 = Date.now();
   const base = taskBaseBranch(task, project);
 
   if (!task.worktree_path || !task.work_branch) {
@@ -417,6 +447,7 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
       await publishProjectBranch(project);
     }
   }
+  console.log(`[autopilot] merged task ${task.id} into ${base} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
 }
@@ -504,6 +535,7 @@ function block(task: Task, reason: string): void {
   // project on every pass. maybeOpenPr re-escalates a failing feature gate on
   // each pass, which is precisely that loop.
   if (getTask(task.id)?.blocked_reason === reason) return;
+  console.warn(`[autopilot] blocked task ${task.id}: ${reason.split("\n")[0]}`);
   updateTask(task.id, { blocked_reason: reason, awaiting_input: 1, running: 0 });
   note(task, `⏸ Autopilot stopped here.\n\n${reason}`);
   publishGlobal(task.id, { type: "task_updated" });

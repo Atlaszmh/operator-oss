@@ -72,6 +72,7 @@ interface TestRun {
   ran: boolean;
   ok: boolean;
   output: string;
+  cached?: boolean; // memoised result — the suite did not actually run this time
 }
 
 /**
@@ -99,7 +100,7 @@ export async function runTestsIn(project: Project, dir: string): Promise<TestRun
   const key = await cleanTreeSha(dir).then((sha) => (sha ? `${sha} ${cmd}` : ""));
   if (key) {
     const hit = testCache().get(key);
-    if (hit) return { ran: true, ok: hit.ok, output: hit.output };
+    if (hit) return { ran: true, ok: hit.ok, output: hit.output, cached: true };
   }
 
   const result = await spawnTests(cmd, dir, project);
@@ -185,8 +186,13 @@ async function diffText(project: Project, task: Task, baseBranch: string): Promi
  * to assume the change was proven to run.
  */
 export async function runGate(task: Task, project: Project, feature: Feature | undefined): Promise<GateVerdict> {
+  const t0 = Date.now();
   const tests = await runTests(project, task);
+  const testsLabel = !tests.ran
+    ? "skipped (no test command)"
+    : `${tests.ok ? "green" : "red"} in ${((Date.now() - t0) / 1000).toFixed(1)}s${tests.cached ? " (cached)" : ""}`;
   if (tests.ran && !tests.ok) {
+    console.log(`[gate] task ${task.id}: tests ${testsLabel} — review skipped`);
     return {
       ok: false,
       testsRan: true,
@@ -210,10 +216,14 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
       : "(this project has no test command, so nothing proved the change runs)",
   });
 
+  const r0 = Date.now();
   let raw: string;
   try {
     raw = await reviewTask(prompt, task.worktree_path || project.repo_path);
   } catch (e) {
+    console.warn(
+      `[gate] task ${task.id}: tests ${testsLabel}, review errored after ${((Date.now() - r0) / 1000).toFixed(1)}s: ${(e as Error).message}`
+    );
     // No connected utility agent, or the review turn died. Fail closed and say
     // why: an unrunnable reviewer must not become an automatic merge.
     //
@@ -231,6 +241,9 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   }
 
   const verdict = parseVerdict(raw);
+  console.log(
+    `[gate] task ${task.id}: tests ${testsLabel}, review ${verdict.ok ? "pass" : "fail"} in ${((Date.now() - r0) / 1000).toFixed(1)}s`
+  );
   const noTests = tests.ran
     ? ""
     : "\n\n(Note: this project has no test command configured, so nothing proved the change actually runs.)";

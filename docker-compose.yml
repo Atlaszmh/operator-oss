@@ -77,6 +77,10 @@ services:
       ORCH_AUTOPILOT_CONCURRENCY: ${ORCH_AUTOPILOT_CONCURRENCY:-}
       ORCH_AUTOPILOT_ATTEMPTS: ${ORCH_AUTOPILOT_ATTEMPTS:-}
       ORCH_GATE_TEST_TIMEOUT_MS: ${ORCH_GATE_TEST_TIMEOUT_MS:-}
+      # Heartbeat cadence for the safety sweep (server.js reads this directly;
+      # it was documented in .env.example but never forwarded here, so setting
+      # it in .env was silently inert in Docker).
+      ORCH_AUTOPILOT_SWEEP_MS: ${ORCH_AUTOPILOT_SWEEP_MS:-}
     ports:
       - "127.0.0.1:${ORCH_PORT:?set ORCH_PORT (e.g. 10001)}:3000"
     volumes:

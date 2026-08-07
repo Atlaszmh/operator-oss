@@ -133,9 +133,15 @@ describe("autopilot scheduler", () => {
   it("starts ready members up to the concurrency cap", async () => {
     const { project } = await planFixture(AUTOPILOT_CONCURRENCY + 2);
     // Park the gate so the event-driven loop can't race ahead and free slots
-    // while we're counting.
+    // while we're counting. Don't await the sweep: a scripted turn ends
+    // instantly, so the sweep itself can reach the parked gate and (correctly)
+    // sit in it until a verdict arrives that never will.
     gateMock.mockImplementation(() => new Promise(() => {}));
-    await sweep(project.id);
+    void sweep(project.id);
+    await vi.waitFor(() => expect(launchedIds()).toHaveLength(AUTOPILOT_CONCURRENCY), { timeout: 5_000 });
+    // A beat for the loop to (wrongly) start more — settled-but-ungated members
+    // hold their slots, so the count must not move.
+    await new Promise((r) => setTimeout(r, 300));
     expect(launchedIds()).toHaveLength(AUTOPILOT_CONCURRENCY);
   });
 
@@ -361,7 +367,10 @@ describe("autopilot scheduler", () => {
 
     const { project, tasks } = await planFixture(1);
     ensureAutopilot();
-    await sweep(project.id);
+    // Not awaited: the held gate is (correctly) allowed to run inside this very
+    // sweep once the instant scripted turn settles, and awaiting it would
+    // deadlock against the release below.
+    void sweep(project.id);
 
     await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
     const mid = getTask(tasks[0].id)!;
@@ -408,4 +417,41 @@ describe("autopilot scheduler", () => {
     expect(t.blocked_reason).toMatch(/unable to run/i);
     expect(t.gate_attempts).toBe(0); // an outage still isn't the task's fault
   }, 40_000);
+});
+
+// The sweep's wall-clock. Gates are minutes of tests + review; nothing that is
+// already startable should ever queue behind one, and simultaneous finishers
+// should not pay for each other's gates. Measured before these existed: a task
+// with free slots and a landed blocker waited 16 minutes for an unrelated gate.
+describe("gate/start ordering", () => {
+  it("starts ready members even while another member's gate is still running", async () => {
+    const { project, tasks } = await planFixture(2);
+    // Task 1 finished its turn and is settled, waiting on a gate that never
+    // resolves. Task 2 is ready with a free slot — it must start anyway.
+    updateTask(tasks[0].id, { started: 1, status: "in_progress" });
+    gateMock.mockImplementation(() => new Promise(() => {}));
+    void sweep(project.id);
+    await vi.waitFor(() => expect(launchedIds()).toContain(tasks[1].id), { timeout: 5_000 });
+  });
+
+  it("gates settled members in parallel, landing them serially", async () => {
+    const { project, tasks } = await planFixture(2);
+    for (const t of tasks) updateTask(t.id, { started: 1, status: "in_progress" });
+    const windows: Array<{ start: number; end: number }> = [];
+    gateMock.mockImplementation(async () => {
+      const w = { start: Date.now(), end: 0 };
+      windows.push(w);
+      await new Promise((r) => setTimeout(r, 300));
+      w.end = Date.now();
+      return { ok: true, feedback: "", testsRan: true, reviewRan: true };
+    });
+    await sweep(project.id);
+    expect(windows).toHaveLength(2);
+    // Overlapping windows = the second gate began before the first finished.
+    expect(Math.max(windows[0].start, windows[1].start)).toBeLessThan(
+      Math.min(windows[0].end, windows[1].end)
+    );
+    // Both landed (no worktree → land closes them out directly).
+    expect(tasks.every((t) => getTask(t.id)!.status === "done")).toBe(true);
+  }, 20_000);
 });
