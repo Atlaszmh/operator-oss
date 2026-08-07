@@ -55,6 +55,11 @@ export interface Feature {
   // Why the last automatic catch-up of this branch failed ('' = it didn't).
   // See lib/featureSync.ts; cleared by the next sync that succeeds.
   sync_conflict: string;
+  // Feature ids this feature starts after (feature_dependencies). Populated by
+  // listFeatures; absent on bare getFeature reads. NOTE: the task mirror keeps
+  // depends_on on the store-level TaskWithUsage type instead — for features it
+  // lives on the shared type deliberately.
+  depends_on?: string[];
   seq: number; // this feature's number from projects.key_seq (0 = never allocated)
   position: number; // manual order within the project (ascending)
   created_at: number;
