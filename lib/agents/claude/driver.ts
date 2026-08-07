@@ -110,8 +110,9 @@ function orchestratorServer(
           name: z.string().describe(SUGGEST_FEATURE.params.name),
           description: z.string().optional().describe(SUGGEST_FEATURE.params.description),
           context: z.string().optional().describe(SUGGEST_FEATURE.params.context),
+          after: z.array(z.string()).optional().describe(SUGGEST_FEATURE.params.after),
         },
-        async (args: { name: string; description?: string; context?: string }) => {
+        async (args: { name: string; description?: string; context?: string; after?: string[] }) => {
           // Upsert by name — see createSuggestedFeature for why re-running a
           // planning turn must not duplicate or error.
           const { text } = createSuggestedFeature(project, args);

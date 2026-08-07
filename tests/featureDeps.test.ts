@@ -15,6 +15,7 @@ import {
   featureDepsSatisfied,
 } from "@/lib/store";
 import { approvePlan, kickoffDependents } from "@/lib/approvePlan";
+import { createSuggestedFeature } from "@/lib/agentTools";
 import { makeRepo, uid } from "./helpers";
 
 // approvePlan arms the controller and kicks a detached sweep — real scheduling
@@ -207,5 +208,36 @@ describe("kickoffDependents", () => {
     setFeatureDeps(b.id, [a.id]); // must NOT arm as a side effect
     expect(getFeature(b.id)!.autopilot).toBe(0);
     expect(featureDepsSatisfied(b.id)).toBe(true); // informational edge — kickoff only fires on ship/heal
+  });
+});
+
+describe("suggest_feature after:", () => {
+  it("resolves names, auto-creates on miss, and wires deps", () => {
+    const p = createProject({ name: `SF-${uid()}` });
+    const a = createFeature({ project_id: p.id, name: "Alpha" });
+    const { feature: b, text } = createSuggestedFeature(p, { name: "Beta", after: ["Alpha", "Gamma"] });
+    const deps = getFeatureDeps(b.id);
+    expect(deps).toContain(a.id);
+    expect(deps).toHaveLength(2); // Gamma auto-created
+    expect(text).toContain("Starts after");
+  });
+
+  it("a cycle degrades to a note, not a throw", () => {
+    const p = createProject({ name: `SFC-${uid()}` });
+    const a = createFeature({ project_id: p.id, name: "One" });
+    const b = createFeature({ project_id: p.id, name: "Two" });
+    setFeatureDeps(b.id, [a.id]);
+    const { text } = createSuggestedFeature(p, { name: "One", after: ["Two"] });
+    expect(text).toContain("dependency cycle");
+    expect(getFeatureDeps(a.id)).toEqual([]); // unchanged
+  });
+
+  it("a bare upsert never wipes an existing chain", () => {
+    const p = createProject({ name: `SFU-${uid()}` });
+    const a = createFeature({ project_id: p.id, name: "Head" });
+    const b = createFeature({ project_id: p.id, name: "Tail" });
+    setFeatureDeps(b.id, [a.id]);
+    createSuggestedFeature(p, { name: "Tail", description: "updated" }); // no `after`
+    expect(getFeatureDeps(b.id)).toEqual([a.id]);
   });
 });

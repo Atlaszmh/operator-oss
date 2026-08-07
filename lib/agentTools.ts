@@ -11,7 +11,7 @@
 
 import { nanoid } from "nanoid";
 import type { Project, Task, Feature, ServiceInfo, Priority, AskQuestion, ToolData } from "./types";
-import { createTask, setTaskDeps, addMessage, updateMessage, updateTask, createFeature, findFeature, updateFeature, getFeature, listTasks } from "./store";
+import { createTask, setTaskDeps, setFeatureDeps, addMessage, updateMessage, updateTask, createFeature, findFeature, updateFeature, getFeature, listTasks } from "./store";
 import { getCapabilities } from "./agents/capabilities";
 import { exposeService } from "./services";
 import { publish } from "./events";
@@ -142,20 +142,42 @@ function resolveFeature(
  */
 export function createSuggestedFeature(
   project: Project,
-  input: { name: string; description?: string; context?: string }
+  input: { name: string; description?: string; context?: string; after?: string[] }
 ): { feature: Feature; text: string } {
   const name = input.name.trim();
+  // Resolve `after:` refs the way task blocked_by resolves features: by id/key/
+  // name, auto-creating on a miss (a planner files "after: M1" before M1's own
+  // suggest_feature call often enough that rejecting would break real plans).
+  // Only applied when the field is present — a bare re-reference must not wipe
+  // an existing chain, same rule as description/context.
+  const wireAfter = (featureId: string): string => {
+    if (input.after === undefined) return "";
+    const ids = input.after
+      .map((ref) => ref.trim())
+      .filter(Boolean)
+      .map((ref) => findFeature(project.id, ref)?.id ?? createFeature({ project_id: project.id, name: ref }).id);
+    try {
+      setFeatureDeps(featureId, ids);
+      return ids.length
+        ? ` Starts after ${ids.length} feature(s) — it will be approved and started automatically when they have all shipped.`
+        : "";
+    } catch (e) {
+      return ` (Could not set the feature chain: ${(e as Error).message}.)`;
+    }
+  };
   const existing = findFeature(project.id, name);
   if (existing) {
     const patch: Partial<Feature> = {};
     if (input.description !== undefined) patch.description = input.description;
     if (input.context !== undefined) patch.context = input.context;
     const feature = (Object.keys(patch).length ? updateFeature(existing.id, patch) : existing) ?? existing;
+    const afterNote = wireAfter(feature.id);
     return {
       feature,
       text:
         `Updated the existing feature "${feature.name}" (id: ${feature.id}). ` +
-        `Pass feature: "${feature.name}" on suggest_task to file work into it.`,
+        `Pass feature: "${feature.name}" on suggest_task to file work into it.` +
+        afterNote,
     };
   }
   const feature = createFeature({
@@ -164,11 +186,13 @@ export function createSuggestedFeature(
     description: input.description ?? "",
     context: input.context ?? "",
   });
+  const afterNote = wireAfter(feature.id);
   return {
     feature,
     text:
       `Created the feature "${feature.name}" (id: ${feature.id}). ` +
-      `Pass feature: "${feature.name}" on each suggest_task that belongs to it — its context is prepended to every one of their sessions.`,
+      `Pass feature: "${feature.name}" on each suggest_task that belongs to it — its context is prepended to every one of their sessions.` +
+      afterNote,
   };
 }
 
