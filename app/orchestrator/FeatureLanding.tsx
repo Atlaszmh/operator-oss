@@ -12,13 +12,14 @@ import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type 
 // no task is selected. Mirrors ProjectLanding's role one level down: the
 // context that every member task inherits, the progress across them, and the
 // integration branch (when the feature owns one).
-export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTask, onSave, onArchive, onDelete, onRefresh, onBack }: {
+export function FeatureLanding({ feature, project, features, tasks, onSelectTask, onNewTask, onSave, onArchive, onDelete, onRefresh, onBack }: {
   feature: FeatureRow;
   project: ProjectRow;
+  features: FeatureRow[]; // ALL the project's features — the chain picker's candidates
   tasks: TaskRow[]; // this feature's members, already filtered by the caller
   onSelectTask: (id: string) => void;
   onNewTask: () => void;
-  onSave: (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">>) => Promise<void>;
+  onSave: (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived" | "depends_on">>) => Promise<void>;
   // Archive/restore goes through its own handler, not onSave — the server may
   // refuse (unmerged commits would strand) and the handler owns that dialog.
   onArchive: (id: string, archived: number) => void;
@@ -32,6 +33,7 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
   const [name, setName] = useState(feature.name);
   const [description, setDescription] = useState(feature.description);
   const [context, setContext] = useState(feature.context);
+  const [deps, setDeps] = useState<string[]>(feature.depends_on ?? []);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -45,15 +47,25 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
     setConfirmDelete(false);
   }, [feature.id, feature.name, feature.description, feature.context]);
 
+  // Reseed the chain draft only when it actually changed server-side
+  // (arrays get a fresh identity on every rollup fetch, so keying on the array
+  // itself would stomp an in-progress edit on every refresh).
+  const depsKey = JSON.stringify(feature.depends_on ?? []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- depsKey stands in for feature.depends_on
+  useEffect(() => { setDeps(feature.depends_on ?? []); }, [feature.id, depsKey]);
+
   const save = async () => {
     setSaveErr(null);
     try {
-      await onSave(feature.id, { name: name.trim(), description, context });
+      await onSave(feature.id, { name: name.trim(), description, context, depends_on: deps });
       setEditing(false);
     } catch (e) {
       setSaveErr(e instanceof Error ? e.message : String(e));
     }
   };
+
+  // The chain picker's candidates: every other live feature in the project.
+  const chainCandidates = features.filter((f) => f.id !== feature.id && !f.archived);
 
   const pct = feature.total > 0 ? Math.round((feature.done / feature.total) * 100) : 0;
   const state = featureState(feature);
@@ -110,6 +122,18 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
             )}
             {feature.suggested_count > 0 && <span className="feat-stat sug">+{feature.suggested_count} suggested</span>}
             {feature.awaiting_count > 0 && <span className="feat-stat await">{feature.awaiting_count} waiting on you</span>}
+            {/* The chain, while it's still waiting: which features must ship
+                before this one auto-starts. Dropped once they all have. */}
+            {!editing && (() => {
+              const waiting = (feature.depends_on ?? [])
+                .map((id) => features.find((f) => f.id === id))
+                .filter((f): f is FeatureRow => !!f && f.merged_at === 0);
+              return waiting.length ? (
+                <span className="feat-stat" title="Approved and started automatically when these ship">
+                  after: {waiting.map((f) => f.name).join(", ")}
+                </span>
+              ) : null;
+            })()}
           </div>
 
           <div className="feat-sect">
@@ -129,12 +153,38 @@ export function FeatureLanding({ feature, project, tasks, onSelectTask, onNewTas
             )}
           </div>
 
+          {editing && (
+            <div className="feat-sect">
+              <div className="feat-sect-h">
+                Starts after
+                <span className="feat-hint">When the last of these ships, this feature&apos;s plan is approved and started automatically.</span>
+              </div>
+              {chainCandidates.length === 0 ? (
+                <div className="hlp">No other features in this project yet.</div>
+              ) : (
+                <div className="dep-list">
+                  {chainCandidates.map((c) => (
+                    <label key={c.id} className={`dep-row ${deps.includes(c.id) ? "on" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={deps.includes(c.id)}
+                        onChange={() => setDeps((d) => (d.includes(c.id) ? d.filter((x) => x !== c.id) : [...d, c.id]))}
+                      />
+                      <span className="dep-title">{c.name}</span>
+                      <span className="dep-status">{c.merged_at > 0 ? "Shipped" : ""}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {saveErr && <ErrNote>{saveErr}</ErrNote>}
 
           {editing && (
             <div className="feat-actions">
               <button className="btn btn-accent btn-sm" onClick={save} disabled={!name.trim()}>{Icon.check()} Save</button>
-              <button className="btn btn-line btn-sm" onClick={() => { setEditing(false); setName(feature.name); setDescription(feature.description); setContext(feature.context); setSaveErr(null); }}>Cancel</button>
+              <button className="btn btn-line btn-sm" onClick={() => { setEditing(false); setName(feature.name); setDescription(feature.description); setContext(feature.context); setDeps(feature.depends_on ?? []); setSaveErr(null); }}>Cancel</button>
             </div>
           )}
 

@@ -431,7 +431,7 @@ export function useOrchestrator() {
     setModal(null);
   };
 
-  const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived">> & { force?: boolean }) => {
+  const saveFeature = async (id: string, patch: Partial<Pick<FeatureRow, "name" | "description" | "context" | "archived" | "depends_on">> & { force?: boolean }) => {
     const fresh = await jsend<FeatureRow>(`/api/features/${id}`, "PATCH", patch);
     setFeatures((prev) => prev.map((f) => (f.id === id ? { ...f, ...fresh } : f)));
   };
