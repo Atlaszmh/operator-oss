@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // the same tool the Claude driver mounts in-process. Auth is the per-instance
 // SERVICE_TOKEN, enforced in middleware.ts (isAgentToolPath).
 export async function POST(req: NextRequest) {
-  let body: { projectId?: string; name?: string; description?: string; context?: string };
+  let body: { projectId?: string; name?: string; description?: string; context?: string; after?: string[] };
   try {
     body = await req.json();
   } catch {
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     name: body.name,
     description: typeof body.description === "string" ? body.description : undefined,
     context: typeof body.context === "string" ? body.context : undefined,
+    after: Array.isArray(body.after) ? body.after.filter((x): x is string => typeof x === "string") : undefined,
   });
   return NextResponse.json({ ok: true, id: feature.id, name: feature.name, text });
 }

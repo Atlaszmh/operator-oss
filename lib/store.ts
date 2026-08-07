@@ -345,8 +345,21 @@ export function listFeatures(projectId: string): FeatureWithCounts[] {
        ORDER BY f.position ASC, f.created_at ASC`
     )
     .all(projectId) as FeatureWithCounts[];
+  // Attach each feature's dependency edges in one query (project-scoped via join).
+  const edges = getDb()
+    .prepare(
+      `SELECT fd.feature_id, fd.depends_on_id FROM feature_dependencies fd
+       JOIN features f ON f.id = fd.feature_id WHERE f.project_id = ?`
+    )
+    .all(projectId) as { feature_id: string; depends_on_id: string }[];
+  const depsByFeature = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = depsByFeature.get(e.feature_id);
+    if (list) list.push(e.depends_on_id);
+    else depsByFeature.set(e.feature_id, [e.depends_on_id]);
+  }
   const pkey = projectKeyOf(projectId);
-  return rows.map((r) => ({ ...r, key: displayKey(pkey, r.seq, "F") }));
+  return rows.map((r) => ({ ...r, key: displayKey(pkey, r.seq, "F"), depends_on: depsByFeature.get(r.id) ?? [] }));
 }
 
 export function getFeature(id: string): Feature | undefined {
@@ -613,6 +626,81 @@ export function setTaskDeps(taskId: string, dependsOn: string[]): void {
     const ins = db.prepare("INSERT INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)");
     for (const id of valid) ins.run(taskId, id, now);
   })();
+}
+
+// ---------- feature dependencies (feature chaining) ----------
+
+// The feature ids a given feature starts after.
+export function getFeatureDeps(featureId: string): string[] {
+  return (
+    getDb().prepare("SELECT depends_on_id FROM feature_dependencies WHERE feature_id = ?").all(featureId) as {
+      depends_on_id: string;
+    }[]
+  ).map((r) => r.depends_on_id);
+}
+
+// The reverse edge: features that start after `featureId` — kickoffDependents'
+// worklist when it ships.
+export function getFeatureDependents(featureId: string): string[] {
+  return (
+    getDb().prepare("SELECT feature_id FROM feature_dependencies WHERE depends_on_id = ?").all(featureId) as {
+      feature_id: string;
+    }[]
+  ).map((r) => r.feature_id);
+}
+
+// Replace a feature's dependency set. Mirrors setTaskDeps: drops self-references
+// and ids outside the feature's project, then guards against cycles. Throws on a
+// cycle. Never arms anything — an edge whose deps are already all shipped is
+// informational (kickoff fires only on a ship/heal event; see the spec).
+export function setFeatureDeps(featureId: string, dependsOn: string[]): void {
+  const db = getDb();
+  const feature = getFeature(featureId);
+  if (!feature) throw new Error("feature not found");
+  const wanted = [...new Set(dependsOn)].filter((id) => id && id !== featureId);
+  const valid = wanted.filter((id) => {
+    const f = getFeature(id);
+    return !!f && f.project_id === feature.project_id;
+  });
+  const edges = db.prepare("SELECT feature_id, depends_on_id FROM feature_dependencies").all() as {
+    feature_id: string;
+    depends_on_id: string;
+  }[];
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.feature_id === featureId) continue; // replacing featureId's edges with `valid`
+    const list = adj.get(e.feature_id);
+    if (list) list.push(e.depends_on_id);
+    else adj.set(e.feature_id, [e.depends_on_id]);
+  }
+  adj.set(featureId, valid);
+  const seen = new Set<string>();
+  const stack = [...valid];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur === featureId) throw new Error("dependency cycle");
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const n of adj.get(cur) ?? []) stack.push(n);
+  }
+  const now = Date.now();
+  db.transaction(() => {
+    db.prepare("DELETE FROM feature_dependencies WHERE feature_id = ?").run(featureId);
+    const ins = db.prepare("INSERT INTO feature_dependencies (feature_id, depends_on_id, created_at) VALUES (?, ?, ?)");
+    for (const id of valid) ins.run(featureId, id, now);
+  })();
+}
+
+// True when nothing this feature depends on is still unshipped. Satisfied =
+// merged_at > 0 — SHIPPED, not "tasks done" and not "archived": an abandoned
+// predecessor (archived without merging) stalls the chain rather than silently
+// starting work on a base that never got the prerequisite. Manual approve-plan
+// is the escape hatch.
+export function featureDepsSatisfied(featureId: string): boolean {
+  return getFeatureDeps(featureId).every((id) => {
+    const f = getFeature(id);
+    return !!f && f.merged_at > 0;
+  });
 }
 
 export function getTask(id: string): Task | undefined {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFeature, getProject, updateFeature, deleteFeature, findFeature, listFeatures } from "@/lib/store";
+import { getFeature, getProject, updateFeature, deleteFeature, findFeature, listFeatures, setFeatureDeps } from "@/lib/store";
 import { unlandedWorkCount } from "@/lib/git";
 import type { Feature } from "@/lib/types";
 
@@ -68,6 +68,19 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (clash && clash.id !== id)
       return NextResponse.json({ error: `a feature named "${name}" already exists in this project` }, { status: 409 });
     allowed.name = name;
+  }
+
+  // The chain edges. Not a column, so handled beside the whitelist: replace-set
+  // semantics, same guards as tasks (self/cross-project dropped, cycles 400).
+  // Setting deps never arms anything — kickoff fires only on a ship/heal event.
+  if ("depends_on" in body) {
+    if (!Array.isArray(body.depends_on))
+      return NextResponse.json({ error: "depends_on must be an array of feature ids" }, { status: 400 });
+    try {
+      setFeatureDeps(id, body.depends_on.filter((x: unknown): x is string => typeof x === "string"));
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
   }
 
   const feature = updateFeature(id, allowed);

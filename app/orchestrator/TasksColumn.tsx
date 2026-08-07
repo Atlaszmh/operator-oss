@@ -98,9 +98,11 @@ function TaskGroup({ label, tasks, agents, selTaskId, running, blockedBy, onSele
 // Two buttons in a div rather than one button — nesting a button inside a
 // button is invalid HTML, and both affordances are wanted here (unlike the
 // status groups, which have nothing to open).
-function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen, onSetArchived }: {
+function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen, onSetArchived, afterNames }: {
   feature: FeatureRow; collapsed: boolean; onToggle: () => void; onOpen: () => void;
   onSetArchived: (archived: number) => void;
+  /** Names of unshipped chain predecessors — shown as an "after:" chip. */
+  afterNames?: string[];
 }) {
   const pct = feature.total > 0 ? Math.round((feature.done / feature.total) * 100) : 0;
   // Whether the work actually LANDED, which the ratio alone never said: 8/8 done
@@ -145,6 +147,14 @@ function FeatureGroupHeader({ feature, collapsed, onToggle, onOpen, onSetArchive
           session of this feature's own that would otherwise surface it. */}
       {feature.sync_conflict && (
         <span className="fgh-conflict" title={feature.sync_conflict}>{Icon.git()} conflict</span>
+      )}
+      {/* The chain, while it's waiting: this feature auto-starts when the named
+          features ship. Dropped once they all have (afterNames is pre-filtered
+          to unshipped predecessors at the call site). */}
+      {afterNames && afterNames.length > 0 && (
+        <span className="fgh-sug" title={`Starts automatically after ${afterNames.join(", ")} ship${afterNames.length === 1 ? "s" : ""}`}>
+          after: {afterNames.join(", ")}
+        </span>
       )}
       <span className="fgh-count" title={`${feature.done} of ${feature.total} done`}>{feature.done}/{feature.total}</span>
       {/* Archive from here rather than only from the feature page: a finished
@@ -193,15 +203,15 @@ const byStatus = (a: TaskRow, b: TaskRow) =>
 // One feature's section: header plus its (collapsible) tasks. Finished features
 // default to collapsed — a shipped feature is history, and folding it is the
 // whole reason its tasks stay filed under it instead of scattering.
-function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, onSelect, onOpen, onSetArchived }: {
+function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, afterNames, onSelect, onOpen, onSetArchived }: {
   feature: FeatureRow; tasks: TaskRow[]; agents: AgentsBundle; selTaskId: string | null;
-  running: Set<string>; blockedBy: Map<string, string[]>; onSelect: (id: string) => void; onOpen: () => void;
+  running: Set<string>; blockedBy: Map<string, string[]>; afterNames?: string[]; onSelect: (id: string) => void; onOpen: () => void;
   onSetArchived: (archived: number) => void;
 }) {
   const [collapsed, toggle] = useCollapsed(`orch_feat_collapsed_${feature.id}`, isFinished(featureState(feature)));
   return (
     <>
-      <FeatureGroupHeader feature={feature} collapsed={collapsed} onToggle={toggle} onOpen={onOpen} onSetArchived={onSetArchived} />
+      <FeatureGroupHeader feature={feature} collapsed={collapsed} onToggle={toggle} onOpen={onOpen} onSetArchived={onSetArchived} afterNames={afterNames} />
       {!collapsed && tasks.map((t) => (
         <TaskCard
           key={t.id} task={t} agents={agents} selected={t.id === selTaskId}
@@ -251,6 +261,17 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
   // archiving a feature sprayed its tasks into the flat status groups, the exact
   // opposite of what grouping is for (see the note above byStatus).
   const featureIds = new Set(features.map((f) => f.id));
+  // Chain chips: this feature's unshipped predecessors, by name. Pre-filtered
+  // here (the header only renders what it's handed) so a fully shipped chain
+  // shows nothing.
+  const featureNameById = new Map(features.map((f) => [f.id, f.name]));
+  const afterNamesFor = (f: FeatureRow) =>
+    (f.depends_on ?? [])
+      .filter((id) => {
+        const dep = features.find((x) => x.id === id);
+        return !!dep && dep.merged_at === 0;
+      })
+      .map((id) => featureNameById.get(id)!);
   // Awaiting tasks are pinned in their own group at the top and must not also
   // appear inside a feature — the status groups already exclude them the same
   // way (`!isAwaiting`), and double-rendering a task would break selection.
@@ -356,7 +377,7 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
           {shownFeatures.map((f) => (
             <FeatureGroup
               key={f.id} feature={f} tasks={byFeature.get(f.id) ?? []} agents={agents}
-              selTaskId={selTaskId} running={running} blockedBy={blockedBy}
+              selTaskId={selTaskId} running={running} blockedBy={blockedBy} afterNames={afterNamesFor(f)}
               onSelect={onSelectTask} onOpen={() => onSelectFeature(f.id)}
               onSetArchived={(archived) => onSetFeatureArchived(f.id, archived)}
             />

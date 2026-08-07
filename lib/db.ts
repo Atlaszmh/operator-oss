@@ -240,6 +240,19 @@ export function init(db: Database.Database) {
       PRIMARY KEY (task_id, depends_on_id)
     );
 
+    -- Feature ordering: a feature "depends on" (starts after) another. Until
+    -- every depends_on_id feature has SHIPPED (merged_at > 0), the dependent
+    -- stays dormant; when the last one ships it automatically receives the
+    -- approve-plan treatment (see lib/approvePlan.ts kickoffDependents). Both
+    -- sides cascade-delete with their feature. CREATE IF NOT EXISTS means older
+    -- DBs pick this up automatically — no migrate() entry needed.
+    CREATE TABLE IF NOT EXISTS feature_dependencies (
+      feature_id    TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+      depends_on_id TEXT NOT NULL REFERENCES features(id) ON DELETE CASCADE,
+      created_at    INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, depends_on_id)
+    );
+
     -- App-level key/value preferences that must be readable server-side (e.g. the
     -- default reasoning level + permission mode a task inherits when it hasn't
     -- overridden them). Distinct from the browser-local UI settings in localStorage.
@@ -281,6 +294,8 @@ export function init(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_dep ON task_dependencies(depends_on_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_deps_feature ON feature_dependencies(feature_id);
+    CREATE INDEX IF NOT EXISTS idx_feature_deps_dep ON feature_dependencies(depends_on_id);
     CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
     CREATE INDEX IF NOT EXISTS idx_pending_task ON pending_messages(task_id);
     CREATE INDEX IF NOT EXISTS idx_summaries_task ON summaries(task_id);

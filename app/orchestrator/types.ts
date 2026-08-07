@@ -44,6 +44,9 @@ export interface FeatureRow {
   // Why the last automatic catch-up of this branch failed ('' = it didn't). Set
   // whenever something lands on the project branch and this one can't follow.
   sync_conflict: string;
+  // Feature ids this one starts after. When the last of them ships, this
+  // feature is auto-approved and started (lib/approvePlan.ts).
+  depends_on: string[];
   position: number;
   total: number; // members that are neither suggested nor cancelled
   done: number; // members with status 'done'

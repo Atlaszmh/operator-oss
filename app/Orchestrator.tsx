@@ -249,6 +249,7 @@ export default function Orchestrator() {
             onBack={isMobile ? () => window.history.back() : undefined}
             feature={feature}
             project={project}
+            features={o.features}
             tasks={o.tasks.filter((t) => t.feature_id === feature.id)}
             onSelectTask={o.setSelTask}
             onNewTask={() => o.setModal("task")}
