@@ -30,6 +30,7 @@ import {
   taskBaseBranch,
   featureMembers,
   readyMembers,
+  getRateLimits,
 } from "./store";
 import { startInitialTurn, startResumeTurn } from "./runner";
 import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn } from "./gates";
@@ -60,14 +61,53 @@ export const GATE_STALL_MS = GATE_TEST_TIMEOUT_MS * 3;
  */
 const MAX_SWEEP_PASSES = 12;
 
+/**
+ * How long autopilot waits before picking up a task it parked on a TRANSIENT
+ * failure — one about the machinery rather than the work (a reviewer that
+ * couldn't run, an exhausted usage window, a worktree it couldn't claim).
+ *
+ * A parked task is invisible to BOTH halves of the loop: readyMembers skips it
+ * and isSettledForGating skips it. So before this existed, a reviewer outage
+ * lasting minutes cost the whole feature until a human noticed and typed
+ * something — five members parked inside half an hour on one outage, and the
+ * queue sat dead overnight. Long enough not to hammer a real outage, short
+ * enough that a queue heals itself inside a coffee break.
+ */
+export const TRANSIENT_RETRY_MS = 10 * 60 * 1000;
+
+/**
+ * The subscription window that is currently refusing turns, if any.
+ *
+ * The driver already records every rate_limit_event it sees (recordRateLimit),
+ * so this is a read of state we hold rather than a new probe. While a window is
+ * shut, an autopilot pass can only convert quota it does not have into burnt
+ * gate attempts and escalations that say "the review could not run" — so the
+ * pass declines to run at all and the heartbeat picks it back up once the
+ * window resets. That is what "moves whenever usage is available" means: the
+ * queue waits for the reset instead of spending its retry budget on it.
+ */
+export function usageBlockedUntil(): number {
+  let until = 0;
+  for (const w of Object.values(getRateLimits())) {
+    if (w.status !== "rejected") continue;
+    // resetsAt is the provider's epoch SECONDS, not millis.
+    const resets = (w.resetsAt ?? 0) * 1000;
+    if (resets > Date.now()) until = Math.max(until, resets);
+  }
+  return until;
+}
+
 declare global {
   // eslint-disable-next-line no-var
-  var __orchAutopilot: { armed: boolean; running: Set<string>; again: Set<string> } | undefined;
+  var __orchAutopilot:
+    | { armed: boolean; running: Set<string>; again: Set<string>; usageNotedUntil: number }
+    | undefined;
 }
 
 // HMR-surviving controller state, same pattern as lib/events.ts / lib/abort.ts.
 function state() {
-  if (!global.__orchAutopilot) global.__orchAutopilot = { armed: false, running: new Set(), again: new Set() };
+  if (!global.__orchAutopilot)
+    global.__orchAutopilot = { armed: false, running: new Set(), again: new Set(), usageNotedUntil: 0 };
   return global.__orchAutopilot;
 }
 
@@ -124,7 +164,23 @@ export function ensureAutopilot(): void {
  */
 export async function sweep(projectId: string): Promise<void> {
   if (!resolveFeatures().autopilot) return;
+  // Usage is shut: starting turns and running reviewers would both fail, and
+  // failing them charges the tasks for an outage. Wait for the reset — the
+  // heartbeat is already asking every minute, so nothing needs to schedule this.
+  const shutUntil = usageBlockedUntil();
+  if (shutUntil) {
+    const st0 = state();
+    if (st0.usageNotedUntil !== shutUntil) {
+      st0.usageNotedUntil = shutUntil;
+      console.log(`[autopilot] usage window is exhausted — pausing until ${new Date(shutUntil).toISOString()}`);
+    }
+    return;
+  }
   const st = state();
+  if (st.usageNotedUntil) {
+    st.usageNotedUntil = 0;
+    console.log("[autopilot] usage is available again — resuming");
+  }
   if (st.running.has(projectId)) {
     st.again.add(projectId);
     return;
@@ -133,6 +189,7 @@ export async function sweep(projectId: string): Promise<void> {
   // Count the queue as live work so the idle daemon can't stop the container
   // between two tasks of a running plan.
   workStarted();
+  let cappedOut = false;
   try {
     // The re-loop is bounded because a pass can now dirty its OWN project:
     // autopilot's mutations publish task_updated for the UI, and that publish is
@@ -147,18 +204,31 @@ export async function sweep(projectId: string): Promise<void> {
       st.again.delete(projectId);
       await sweepOnce(projectId);
     } while (st.again.has(projectId) && passes++ < MAX_SWEEP_PASSES);
-    if (st.again.has(projectId))
+    if (st.again.has(projectId)) {
+      cappedOut = true;
       console.warn(
         `[autopilot] project ${projectId} was still dirty after ${MAX_SWEEP_PASSES} passes — leaving the rest to the next sweep`
       );
+    }
     // Only slow sweeps log — the no-op sweep that follows every event on every
     // project is single-digit milliseconds and would be pure noise.
     const took = Date.now() - t0;
     if (took > 1000) console.log(`[autopilot] sweep of project ${projectId}: ${passes} pass(es) in ${(took / 1000).toFixed(1)}s`);
   } finally {
     st.running.delete(projectId);
-    st.again.delete(projectId);
+    // A signal that landed while this pass was unwinding — after the loop's
+    // last `again` check but before the slot was released — used to be thrown
+    // away here, because a concurrent caller can only mark the project dirty
+    // and this line then cleared the mark. The wake-ups are edge-triggered, so
+    // a dropped one waits out the 60s heartbeat with everything it unblocked
+    // sitting idle. Re-arm instead of dropping.
+    //
+    // Never after the cap fired, though: a pass that re-dirties its own project
+    // every time would then loop forever with no bound (one did — see above).
+    // That remainder stays the heartbeat's, which is exactly what the cap means.
+    const pending = st.again.delete(projectId);
     workEnded();
+    if (pending && !cappedOut) setTimeout(() => void sweep(projectId).catch(() => {}), 0).unref?.();
   }
 }
 
@@ -195,6 +265,19 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
     publishGlobal(t.id, { type: "task_updated" });
   }
 
+  // 0.5 Un-park anything autopilot stopped for a TRANSIENT reason whose backoff
+  //     has elapsed. A parked task is invisible to both halves of the loop, so
+  //     an outage that has since cleared would otherwise hold the feature until
+  //     a human typed something. Terminal blocks (gate_retry_at 0) are a
+  //     judgement about the WORK and stay the human's — untouched here.
+  for (const t of featureMembers(feature.id)) {
+    if (!t.blocked_reason || !t.gate_retry_at || t.gate_retry_at > Date.now()) continue;
+    updateTask(t.id, { blocked_reason: "", awaiting_input: 0, gate_retry_at: 0 });
+    console.log(`[autopilot] un-parking task ${t.id} — its backoff elapsed, retrying`);
+    note(t, "↻ Autopilot is picking this back up — what stopped it was a temporary failure, not the work.");
+    publishGlobal(t.id, { type: "task_updated" });
+  }
+
   // 1. Start ready members FIRST, up to the cap. Starting is the cheap half
   //    (claim + worktree + title); the gates below are minutes of tests plus a
   //    reviewer turn, and they used to run ahead of this — so a task whose
@@ -215,7 +298,9 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
     if (t.started) continue;
     const res = await startInitialTurn(t, project);
     if (!res.ok && res.status !== 409) {
-      block(t, `Autopilot could not start this task: ${res.error}`);
+      // Launch failures are usually about the machine, not the plan (a worktree
+      // that couldn't be cut, a busy repo), so this one retries itself too.
+      block(t, `Autopilot could not start this task: ${res.error}`, { retryInMs: TRANSIENT_RETRY_MS });
       continue;
     }
     console.log(`[autopilot] started task ${t.id} "${t.title}"`);
@@ -289,7 +374,15 @@ async function applyVerdict(project: Project, feature: Feature, task: Task, verd
   // so no counter has to be stored anywhere.
   if (verdict.inconclusive) {
     if (Date.now() - task.updated_at > GATE_STALL_MS) {
-      block(task, `The gate has been unable to run for over ${Math.round(GATE_STALL_MS / 60000)} minutes, so autopilot stopped waiting for it.\n\n${verdict.feedback}`);
+      // Transient by construction: the reviewer couldn't run, which says nothing
+      // about the diff. Surface it, but keep a way back that doesn't need the
+      // user — the outage usually ends before they read the notice.
+      block(
+        task,
+        `The gate has been unable to run for over ${Math.round(GATE_STALL_MS / 60000)} minutes, so autopilot stopped waiting for it. ` +
+          `It will try again by itself in ${Math.round(TRANSIENT_RETRY_MS / 60000)} minutes — answering here also resumes it immediately.\n\n${verdict.feedback}`,
+        { retryInMs: TRANSIENT_RETRY_MS }
+      );
       return;
     }
     console.warn(`[autopilot] gate inconclusive for task ${task.id}, will retry: ${verdict.feedback}`);
@@ -528,15 +621,26 @@ function note(task: Task, text: string): void {
  * surface to build. Cleared by any human message into the task (see the messages
  * route): answering it IS how you resume it.
  */
-function block(task: Task, reason: string): void {
+function block(task: Task, reason: string, opts: { retryInMs?: number } = {}): void {
   // Idempotent. A task already escalated for this exact reason gains nothing from
   // being escalated again — it just gets a duplicate transcript line — and since
   // the publish below is a scheduling signal, re-blocking would re-dirty the
   // project on every pass. maybeOpenPr re-escalates a failing feature gate on
   // each pass, which is precisely that loop.
   if (getTask(task.id)?.blocked_reason === reason) return;
-  console.warn(`[autopilot] blocked task ${task.id}: ${reason.split("\n")[0]}`);
-  updateTask(task.id, { blocked_reason: reason, awaiting_input: 1, running: 0 });
+  // A transient park still raises the flag — the queue IS stopped right now,
+  // and saying so is honest — but it also carries its own way back, so the
+  // recovery doesn't depend on the user seeing it. If the retry fails the task
+  // simply re-parks, still visible; there is no silent loop to get lost in.
+  console.warn(
+    `[autopilot] blocked task ${task.id}${opts.retryInMs ? ` (retrying in ${Math.round(opts.retryInMs / 60000)}m)` : ""}: ${reason.split("\n")[0]}`
+  );
+  updateTask(task.id, {
+    blocked_reason: reason,
+    awaiting_input: 1,
+    running: 0,
+    gate_retry_at: opts.retryInMs ? Date.now() + opts.retryInMs : 0,
+  });
   note(task, `⏸ Autopilot stopped here.\n\n${reason}`);
   publishGlobal(task.id, { type: "task_updated" });
 }

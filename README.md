@@ -107,6 +107,8 @@ Pass, and the task merges into the integration branch and the next one starts. F
 
 The queue never idles behind its own bookkeeping: a task whose dependencies have landed starts immediately, even while other tasks are still being gated, and when several tasks finish together their gates run in parallel (merges stay serial). Every start, gate, and merge logs its duration, so a slow queue is diagnosable from the server logs.
 
+**It also gets itself unstuck.** When autopilot stops for something that isn't about your code — a reviewer that couldn't run, a task it failed to launch — it says so *and* retries on its own a few minutes later, so an outage that clears while you're away doesn't leave the queue parked until you notice. Only a real verdict on the work (a review that failed, a conflict the agent couldn't resolve) waits for you. And when your subscription's usage window is exhausted, autopilot pauses instead of spending the task's retries on turns that can't run, then picks up where it left off the moment the window resets.
+
 **You merge the PR.** When the last task lands, the integration branch is pushed and a PR opened against your project branch, its body assembled from the approved spec and every task's outcome line. Review it on GitHub, where CI and your review tools already live.
 
 **When it gets stuck**, the task shows up in the "N need you" pill you already watch, with the reason in full on the feature page. Reply to it — answering clears the block and it picks the task back up. A stuck task never stalls its siblings; only work that depended on it waits.

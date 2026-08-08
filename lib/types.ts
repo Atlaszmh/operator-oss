@@ -107,6 +107,7 @@ export interface Task {
   outcome: string;
   gate_attempts: number; // consumed autopilot gate retries (reset by any human message)
   blocked_reason: string; // why autopilot stopped working this task ("" = not blocked)
+  gate_retry_at: number; // when autopilot may un-park a TRANSIENT block itself (0 = human's call)
   generation: number; // increments on each /clear
   seq: number; // this task's number from projects.key_seq (0 = never allocated)
   position: number; // manual order within the project (list groups + board columns, ascending)

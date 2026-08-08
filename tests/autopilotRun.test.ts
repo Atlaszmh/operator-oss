@@ -62,6 +62,7 @@ import {
   getTask,
   setTaskDeps,
   updateTask,
+  setSetting,
 } from "@/lib/store";
 import { publishGlobal } from "@/lib/events";
 
@@ -76,6 +77,7 @@ beforeEach(() => {
   testsMock.mockResolvedValue({ ran: true, ok: true, output: "" });
   prMock.mockReset();
   prMock.mockResolvedValue({ ok: true, url: "https://example/pull/7" });
+  setSetting("rate_limit_info", "{}");
   runTurnMock.mockReset();
   // Default scripted turn: write a file into the worktree so there is something
   // real to merge, then end. The runner settles it to awaiting_input=1, which is
@@ -454,4 +456,66 @@ describe("gate/start ordering", () => {
     // Both landed (no worktree → land closes them out directly).
     expect(tasks.every((t) => getTask(t.id)!.status === "done")).toBe(true);
   }, 20_000);
+});
+
+// Self-healing. A parked task is invisible to BOTH halves of the loop, so a
+// transient outage — a reviewer that couldn't run, an exhausted usage window —
+// used to cost the whole feature until a human noticed and typed something.
+// Observed: five members parked inside 30 minutes on one reviewer outage, and
+// the queue sat dead until morning.
+describe("self-healing", () => {
+  it("retries a task parked on a transient gate outage once its backoff elapses", async () => {
+    const { project, tasks } = await planFixture(1);
+    gateMock.mockResolvedValue({
+      ok: false, inconclusive: true, testsRan: true, reviewRan: false,
+      feedback: "The review could not run: usage limit reached",
+    });
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+
+    // Age it past the stall grace so autopilot parks it.
+    getDb().prepare("UPDATE tasks SET updated_at = ? WHERE id = ?").run(Date.now() - GATE_STALL_MS - 1000, tasks[0].id);
+    await sweep(project.id);
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.blocked_reason).not.toBe(""), { timeout: 15_000 });
+    // Parked, but with its own way back — no human required.
+    expect(getTask(tasks[0].id)!.gate_retry_at).toBeGreaterThan(Date.now());
+
+    // The reviewer comes back and the backoff elapses. Nobody touches the task.
+    gateMock.mockResolvedValue({ ok: true, feedback: "", testsRan: true, reviewRan: true });
+    getDb().prepare("UPDATE tasks SET gate_retry_at = ? WHERE id = ?").run(Date.now() - 1, tasks[0].id);
+    await sweep(project.id);
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 15_000 });
+    expect(getTask(tasks[0].id)!.blocked_reason).toBe("");
+  }, 45_000);
+
+  it("leaves a task blocked on a real review failure for the human", async () => {
+    const { project, tasks } = await planFixture(1);
+    gateMock.mockResolvedValue({ ok: false, feedback: "the diff does not do what the brief says", testsRan: true, reviewRan: true });
+    ensureAutopilot();
+    for (let i = 0; i <= AUTOPILOT_ATTEMPTS + 1; i++) {
+      await sweep(project.id);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.blocked_reason).toMatch(/stopped retrying/i), { timeout: 20_000 });
+    // A verdict about the WORK is the human's call — no self-retry.
+    expect(getTask(tasks[0].id)!.gate_retry_at).toBe(0);
+  }, 45_000);
+
+  it("waits out an exhausted usage window instead of burning the task's retries", async () => {
+    const { project, tasks } = await planFixture(1);
+    updateTask(tasks[0].id, { started: 1, status: "in_progress" });
+    const secs = (ms: number) => Math.floor((Date.now() + ms) / 1000);
+    setSetting("rate_limit_info", JSON.stringify({ five_hour: { status: "rejected", resetsAt: secs(60 * 60_000) } }));
+
+    await sweep(project.id);
+    expect(gateMock).not.toHaveBeenCalled(); // nothing spent while the window is shut
+    expect(getTask(tasks[0].id)!.blocked_reason).toBe(""); // and nothing escalated
+    expect(getTask(tasks[0].id)!.gate_attempts).toBe(0);
+
+    // The window resets: the queue picks itself back up with no human input.
+    setSetting("rate_limit_info", JSON.stringify({ five_hour: { status: "rejected", resetsAt: secs(-10_000) } }));
+    await sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+  }, 30_000);
 });

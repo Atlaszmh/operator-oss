@@ -106,8 +106,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       // A human message is also how a task autopilot escalated gets un-stuck:
       // answering it clears the block and returns its retry budget, so there's
       // no separate "resume" affordance to find, or to forget about.
-      if (fresh.blocked_reason || fresh.gate_attempts)
-        updateTask(id, { blocked_reason: "", gate_attempts: 0 });
+      // gate_retry_at goes with it: the user answering IS the retry, so a
+      // pending self-retry timer for the block they just cleared is stale.
+      if (fresh.blocked_reason || fresh.gate_attempts || fresh.gate_retry_at)
+        updateTask(id, { blocked_reason: "", gate_attempts: 0, gate_retry_at: 0 });
 
       // Resume: catch the worktree up, persist + echo the message, then hand off
       // to the detached runner. Same path the queue drainer uses.

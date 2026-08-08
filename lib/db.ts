@@ -143,6 +143,12 @@ export function init(db: Database.Database) {
       -- stopped touching this task, and is cleared by any human message.
       gate_attempts  INTEGER NOT NULL DEFAULT 0,
       blocked_reason TEXT NOT NULL DEFAULT '',
+      -- When autopilot parked this task on a TRANSIENT failure (a reviewer that
+      -- couldn't run, an exhausted usage window), the time it may pick it back
+      -- up by itself. 0 = the block is a judgement about the WORK, so only a
+      -- human clears it. Without this a five-minute outage cost a whole feature
+      -- until someone noticed and typed something.
+      gate_retry_at  INTEGER NOT NULL DEFAULT 0,
       generation  INTEGER NOT NULL DEFAULT 1,
       started     INTEGER NOT NULL DEFAULT 0,
       running     INTEGER NOT NULL DEFAULT 0,
@@ -470,6 +476,7 @@ export function migrate(db: Database.Database) {
   // Autopilot's per-task gate bookkeeping (lib/autopilot.ts + lib/gates.ts).
   if (!taskCols.includes("gate_attempts")) db.exec("ALTER TABLE tasks ADD COLUMN gate_attempts INTEGER NOT NULL DEFAULT 0");
   if (!taskCols.includes("blocked_reason")) db.exec("ALTER TABLE tasks ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''");
+  if (!taskCols.includes("gate_retry_at")) db.exec("ALTER TABLE tasks ADD COLUMN gate_retry_at INTEGER NOT NULL DEFAULT 0");
   // Autopilot columns on features (added after the feature layer shipped). The
   // features table itself is CREATE IF NOT EXISTS, so only these two need a
   // migration entry — an older DB has the table but not the columns.

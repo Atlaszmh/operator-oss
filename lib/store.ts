@@ -761,9 +761,9 @@ export function updateTask(id: string, patch: Partial<Task>): Task | undefined {
   getDb()
     .prepare(
       `UPDATE tasks SET feature_id=?, title=?, description=?, priority=?, status=?, suggested=?, agent=?, model=?, resolved_model=?, reasoning=?, permission_mode=?,
-        session_id=?, worktree_path=?, work_branch=?, base_sha=?, merged_at=?, pr_url=?, outcome=?, gate_attempts=?, blocked_reason=?, generation=?, started=?, running=?, awaiting_input=?, updated_at=? WHERE id=?`
+        session_id=?, worktree_path=?, work_branch=?, base_sha=?, merged_at=?, pr_url=?, outcome=?, gate_attempts=?, blocked_reason=?, gate_retry_at=?, generation=?, started=?, running=?, awaiting_input=?, updated_at=? WHERE id=?`
     )
-    .run(n.feature_id ?? null, n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.outcome ?? "", n.gate_attempts ?? 0, n.blocked_reason ?? "", n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
+    .run(n.feature_id ?? null, n.title, n.description, n.priority, n.status, n.suggested, n.agent, n.model ?? null, n.resolved_model ?? null, n.reasoning ?? null, n.permission_mode ?? null, n.session_id, n.worktree_path, n.work_branch, n.base_sha, n.merged_at, n.pr_url, n.outcome ?? "", n.gate_attempts ?? 0, n.blocked_reason ?? "", n.gate_retry_at ?? 0, n.generation, n.started, n.running, n.awaiting_input, n.updated_at, id);
   return getTask(id);
 }
 
