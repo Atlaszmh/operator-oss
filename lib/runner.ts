@@ -22,6 +22,7 @@ import { isAuthFailure, AUTH_EXPIRED_NOTICE } from "@/lib/authFailure";
 import { isUsageLimit, USAGE_LIMIT_NOTICE } from "@/lib/usageLimit";
 import { markAgentAuthBroken, clearAgentAuthBroken } from "@/lib/agents/connections";
 import { toolData, type Task, type Project, type ToolData, type TurnUsage } from "@/lib/types";
+import { trace, secs } from "./trace";
 
 /**
  * Kick off one user turn in the background. Returns immediately; the caller
@@ -333,6 +334,7 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
       setSetting("first_task_started", String(startedAt));
       track("first_task_started", { task_id: id, project_id: project.id, seeded: !!project.seeded });
     }
+    trace("runner", `TURN-START task=${id} gen=${gen} ${task.session_id ? "resume" : "fresh"} agent=${task.agent}`);
     track("turn_started", {
       task_id: id,
       project_id: project.id,
@@ -491,6 +493,13 @@ async function run(task: Task, project: Project, userText: string, syncNote: str
       // Only written when this turn reported one: a turn that says nothing must
       // not blank the outcome an earlier turn already earned.
       updateTask(id, { running: 0, session_id: sessionId, awaiting_input: opened && !autopilotOwns(current) ? 1 : 0, ...(outcome ? { outcome } : {}) });
+      // The handover point: from here the task is autopilot's to gate (or the
+      // user's to answer). Pairs with TURN-START to bound the turn in the
+      // timeline, and names which of the two now owns it.
+      trace(
+        "runner",
+        `TURN-END task=${id} gen=${gen} in ${secs(startedAt)} → ${autopilotOwns(current) ? "autopilot gate" : "awaiting user"}`
+      );
     }
     // Keyed by (task_id, generation), so this settles THIS generation's session
     // row and never touches the fresh generation — safe to run either way.

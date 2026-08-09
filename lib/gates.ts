@@ -17,6 +17,7 @@ import { buildReviewPrompt, parseVerdict, clip } from "./agents/shared";
 import { resolveFeatures } from "./features";
 import { GATE_TEST_TIMEOUT_MS } from "./config";
 import type { Feature, GateVerdict, Project, Task } from "./types";
+import { trace, traceWarn, secs } from "./trace";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -192,7 +193,7 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
     ? "skipped (no test command)"
     : `${tests.ok ? "green" : "red"} in ${((Date.now() - t0) / 1000).toFixed(1)}s${tests.cached ? " (cached)" : ""}`;
   if (tests.ran && !tests.ok) {
-    console.log(`[gate] task ${task.id}: tests ${testsLabel} — review skipped`);
+    trace("gate", `TESTS-RED task=${task.id} ${testsLabel} — review skipped, feedback goes back to the task`);
     return {
       ok: false,
       testsRan: true,
@@ -221,8 +222,9 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   try {
     raw = await reviewTask(prompt, task.worktree_path || project.repo_path);
   } catch (e) {
-    console.warn(
-      `[gate] task ${task.id}: tests ${testsLabel}, review errored after ${((Date.now() - r0) / 1000).toFixed(1)}s: ${(e as Error).message}`
+    traceWarn(
+      "gate",
+      `REVIEW-ERROR task=${task.id} tests ${testsLabel}, review died after ${secs(r0)}: ${(e as Error).message}`
     );
     // No connected utility agent, or the review turn died. Fail closed and say
     // why: an unrunnable reviewer must not become an automatic merge.
@@ -241,8 +243,9 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   }
 
   const verdict = parseVerdict(raw);
-  console.log(
-    `[gate] task ${task.id}: tests ${testsLabel}, review ${verdict.ok ? "pass" : "fail"} in ${((Date.now() - r0) / 1000).toFixed(1)}s`
+  trace(
+    "gate",
+    `REVIEW-DONE task=${task.id} tests ${testsLabel}, review ${verdict.ok ? "pass" : "fail"} in ${secs(r0)}`
   );
   const noTests = tests.ran
     ? ""

@@ -31,6 +31,7 @@ import {
   featureMembers,
   readyMembers,
   getRateLimits,
+  getTaskDeps,
 } from "./store";
 import { startInitialTurn, startResumeTurn } from "./runner";
 import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn } from "./gates";
@@ -43,6 +44,7 @@ import { workStarted, workEnded } from "./idle";
 import { resolveFeatures } from "./features";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS, GATE_TEST_TIMEOUT_MS } from "./config";
 import type { Feature, GateVerdict, Project, Task } from "./types";
+import { trace, traceWarn, secs } from "./trace";
 
 /**
  * How long a task may sit with a gate that can't reach a verdict before
@@ -151,8 +153,18 @@ export function ensureAutopilot(): void {
     // exactly what an armed feature is waiting for. Filtering on feature_id
     // meant a plan landed in the tray and nothing came to collect it. A sweep
     // for a project with no armed feature is one indexed query and a return.
-    if (projectId) void sweep(projectId).catch(() => {});
+    if (!projectId) return;
+    // The wake itself is timeline-worthy: when a queue looks hung, the first
+    // question is always "did the signal even arrive?", and only a line here
+    // can answer it. Guarded so projects with nothing armed stay silent.
+    if (hasArmedFeature(projectId)) trace("autopilot", `WAKE ${type} task=${taskId} project=${projectId}`);
+    void sweep(projectId).catch(() => {});
   });
+}
+
+/** Cheap "is autopilot even watching this project" check, for log guards. */
+function hasArmedFeature(projectId: string): boolean {
+  return listFeatures(projectId).some((f) => f.autopilot && !f.archived);
 }
 
 /**
@@ -172,16 +184,21 @@ export async function sweep(projectId: string): Promise<void> {
     const st0 = state();
     if (st0.usageNotedUntil !== shutUntil) {
       st0.usageNotedUntil = shutUntil;
-      console.log(`[autopilot] usage window is exhausted — pausing until ${new Date(shutUntil).toISOString()}`);
+      trace("autopilot", `USAGE-PAUSED until ${new Date(shutUntil).toISOString()} — not starting or gating anything until then`);
     }
     return;
   }
   const st = state();
   if (st.usageNotedUntil) {
     st.usageNotedUntil = 0;
-    console.log("[autopilot] usage is available again — resuming");
+    trace("autopilot", "USAGE-OK — resuming");
   }
   if (st.running.has(projectId)) {
+    // Piling up behind an in-flight pass is normal and safe (the pass re-loops),
+    // but it IS the shape of "everything waited on one slow gate", so say it
+    // once per in-flight sweep rather than for every event that lands.
+    if (!st.again.has(projectId) && hasArmedFeature(projectId))
+      trace("autopilot", `DEFERRED project=${projectId} — a sweep is already running; it will re-loop`);
     st.again.add(projectId);
     return;
   }
@@ -206,14 +223,15 @@ export async function sweep(projectId: string): Promise<void> {
     } while (st.again.has(projectId) && passes++ < MAX_SWEEP_PASSES);
     if (st.again.has(projectId)) {
       cappedOut = true;
-      console.warn(
-        `[autopilot] project ${projectId} was still dirty after ${MAX_SWEEP_PASSES} passes — leaving the rest to the next sweep`
+      traceWarn(
+        "autopilot",
+        `SWEEP-CAP project=${projectId} still dirty after ${MAX_SWEEP_PASSES} passes — remainder handed to the heartbeat`
       );
     }
     // Only slow sweeps log — the no-op sweep that follows every event on every
     // project is single-digit milliseconds and would be pure noise.
     const took = Date.now() - t0;
-    if (took > 1000) console.log(`[autopilot] sweep of project ${projectId}: ${passes} pass(es) in ${(took / 1000).toFixed(1)}s`);
+    if (took > 1000) trace("autopilot", `SWEEP-END project=${projectId} passes=${passes} in ${(took / 1000).toFixed(1)}s`);
   } finally {
     st.running.delete(projectId);
     // A signal that landed while this pass was unwinding — after the loop's
@@ -244,7 +262,7 @@ async function sweepOnce(projectId: string): Promise<void> {
     } catch (e) {
       // One wedged feature must never abort the sweep for the others — the same
       // best-effort rule sweepRecaps() follows.
-      console.error(`[autopilot] feature ${feature.id} failed its pass:`, e);
+      traceWarn("autopilot", `PASS-ERROR feature=${feature.id}: ${(e as Error).message}`);
     }
   }
 }
@@ -273,7 +291,7 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
   for (const t of featureMembers(feature.id)) {
     if (!t.blocked_reason || !t.gate_retry_at || t.gate_retry_at > Date.now()) continue;
     updateTask(t.id, { blocked_reason: "", awaiting_input: 0, gate_retry_at: 0 });
-    console.log(`[autopilot] un-parking task ${t.id} — its backoff elapsed, retrying`);
+    trace("autopilot", `UNPARK task=${t.id} — backoff elapsed, retrying`);
     note(t, "↻ Autopilot is picking this back up — what stopped it was a temporary failure, not the work.");
     publishGlobal(t.id, { type: "task_updated" });
   }
@@ -303,7 +321,7 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
       block(t, `Autopilot could not start this task: ${res.error}`, { retryInMs: TRANSIENT_RETRY_MS });
       continue;
     }
-    console.log(`[autopilot] started task ${t.id} "${t.title}"`);
+    trace("autopilot", `START task=${t.id} "${t.title}" model=${t.model ?? "default"} feature="${feature.name}"`);
     slots--;
   }
 
@@ -318,7 +336,7 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
       const t0 = Date.now();
       const verdict = await runGate(t, project, feature);
       const word = verdict.inconclusive ? "inconclusive" : verdict.ok ? "pass" : "fail";
-      console.log(`[autopilot] gate for task ${t.id}: ${word} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      trace("autopilot", `GATE-DONE task=${t.id} verdict=${word} in ${secs(t0)}`);
       return [t, verdict] as const;
     })
   );
@@ -326,6 +344,70 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
 
   // 3. Everything landed → hand the feature back to the user as a PR.
   await maybeOpenPr(project, feature);
+
+  // 4. Say where the feature now stands. A hang is BY DEFINITION the absence of
+  //    events, so a log that only records actions can never explain one — this
+  //    is the line that does, and when nothing can move it names every
+  //    outstanding member and what it is waiting for.
+  reportDisposition(feature);
+}
+
+/**
+ * One timeline line per feature per pass, and the full reason when it's stuck.
+ *
+ * "Stalled" is deliberately about MOVEMENT, not completeness: outstanding work
+ * with nothing running, nothing gating and nothing startable. That is the state
+ * the user experiences as "it just hung", and every cause of it (a member
+ * blocked on a human, a dependency that never landed, a plan still sitting in
+ * the tray unapproved) is named per member so the next question is answerable
+ * from the log alone.
+ */
+function reportDisposition(feature: Feature): void {
+  const members = featureMembers(feature.id);
+  const isDone = (t: Task) => t.status === "done" || t.status === "cancelled";
+  const running = members.filter((t) => t.running || hasTurn(t.id));
+  const gating = members.filter(isSettledForGating);
+  const parked = members.filter((t) => t.blocked_reason && t.gate_retry_at);
+  const blocked = members.filter((t) => t.blocked_reason && !t.gate_retry_at);
+  const suggested = members.filter((t) => t.suggested);
+  const ready = readyMembers(feature.id).filter((t) => !t.started);
+  const done = members.filter(isDone);
+
+  const summary =
+    `feature="${feature.name}" ${members.length} members: ${done.length} done, ${running.length} running, ` +
+    `${gating.length} gating, ${ready.length} ready, ${parked.length} parked(auto-retry), ` +
+    `${blocked.length} blocked(needs you), ${suggested.length} suggested`;
+
+  const outstanding = members.filter((t) => !isDone(t) && !t.suggested);
+  const moving = running.length + gating.length + ready.length;
+  if (!outstanding.length || moving > 0) {
+    trace("autopilot", `STATE ${summary}`);
+    return;
+  }
+
+  // Nothing can move. Name every outstanding member and why.
+  traceWarn("autopilot", `STALLED ${summary} — nothing can move; reasons follow`);
+  for (const t of outstanding) {
+    if (t.blocked_reason && !t.gate_retry_at) {
+      traceWarn("autopilot", `  task=${t.id} "${t.title}" NEEDS-YOU: ${t.blocked_reason.split("\n")[0]}`);
+    } else if (t.blocked_reason) {
+      traceWarn("autopilot", `  task=${t.id} "${t.title}" PARKED until ${new Date(t.gate_retry_at).toISOString()}`);
+    } else {
+      // Not blocked and not startable can only mean an unsatisfied dependency —
+      // print the blockers with their statuses, which is the whole diagnosis.
+      const blockers = getTaskDeps(t.id)
+        .map((id) => getTask(id))
+        .filter((d): d is Task => !!d)
+        .filter((d) => !isDone(d))
+        .map((d) => `${d.title}=${d.status}${d.blocked_reason ? "/blocked" : ""}`);
+      traceWarn(
+        "autopilot",
+        `  task=${t.id} "${t.title}" WAITING on ${blockers.length ? blockers.join(", ") : "(nothing — status " + t.status + ", started=" + t.started + ")"}`
+      );
+    }
+  }
+  if (suggested.length)
+    traceWarn("autopilot", `  ${suggested.length} suggested task(s) need Approve plan before autopilot will run them`);
 }
 
 /**
@@ -385,7 +467,10 @@ async function applyVerdict(project: Project, feature: Feature, task: Task, verd
       );
       return;
     }
-    console.warn(`[autopilot] gate inconclusive for task ${task.id}, will retry: ${verdict.feedback}`);
+    traceWarn(
+      "autopilot",
+      `GATE-INCONCLUSIVE task=${task.id} (no attempt charged, will retry): ${verdict.feedback.split("\n")[0]}`
+    );
     return;
   }
 
@@ -396,7 +481,7 @@ async function applyVerdict(project: Project, feature: Feature, task: Task, verd
       return;
     }
     updateTask(task.id, { gate_attempts: attempts });
-    console.log(`[autopilot] gate failed for task ${task.id} (attempt ${attempts}/${AUTOPILOT_ATTEMPTS}) — sending feedback turn`);
+    trace("autopilot", `GATE-FAIL task=${task.id} attempt=${attempts}/${AUTOPILOT_ATTEMPTS} — sending feedback turn`);
     await sendTurn(project, task, verdict.feedback);
     return;
   }
@@ -540,7 +625,7 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
       await publishProjectBranch(project);
     }
   }
-  console.log(`[autopilot] merged task ${task.id} into ${base} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  trace("autopilot", `MERGED task=${task.id} into ${base} in ${secs(t0)}`);
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
 }
