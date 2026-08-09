@@ -1,6 +1,6 @@
 import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount, pushBranch } from "./git";
 import { listFeatures, listTasks, listProjects, createTask, getFeature, updateFeature, updateTask, taskBaseBranch } from "./store";
-import { buildFeatureConflictTaskPrompt } from "./agents/shared";
+import { buildFeatureConflictTaskPrompt, buildTaskLandConflictPrompt } from "./agents/shared";
 import { resolveFeatures } from "./features";
 import { hasTurn } from "./abort";
 import type { FeatureWithCounts, Project, Task } from "./types";
@@ -319,6 +319,54 @@ export function fileConflictResolutionTask(
     suggested: true,
   });
   return { task, existing: false };
+}
+
+/** Deterministic title for the task-level resolver — dedupe key, same as above. */
+export const landResolutionTaskTitle = (workBranch: string): string => `Resolve: land ${workBranch}`;
+
+/** Is this task itself a resolver? A resolver that conflicts must never file a
+ *  resolver for itself — that is an unbounded task factory, and the second one
+ *  would be briefed to merge a branch whose own merge is what's broken. */
+export const isResolutionTask = (title: string): boolean => title.startsWith("Resolve: ");
+
+/**
+ * File the task that lands a MEMBER's branch when the member's own agent could
+ * not reconcile the merge — the same escape hatch feature-level conflicts get,
+ * for the level below, and for the same reason: a conflict that dead-ends stops
+ * a whole feature, and observed twice in one run (two members, same six files,
+ * both parked until a human marked them done by hand).
+ *
+ * The difference from the feature-level filer is the merge DIRECTION. This
+ * resolver's worktree is cut from the base, and it merges the member's work
+ * branch in — which is exactly the landing that failed — so when the resolver
+ * merges through the normal gate, the member's work is on the base branch and
+ * the member's own next merge attempt is a no-op that closes it out.
+ *
+ * Suggested, hi priority, deduped by title: identical semantics to
+ * fileConflictResolutionTask, so an armed feature adopts it unattended and a
+ * manual one shows a one-click Start.
+ */
+export function fileLandResolutionTask(
+  project: Project,
+  feature: Pick<FeatureWithCounts, "id">,
+  task: Pick<Task, "work_branch">,
+  baseBranch: string,
+  conflicts: string[]
+): { task: Task; existing: boolean } {
+  const title = landResolutionTaskTitle(task.work_branch);
+  const open = listTasks(project.id).find(
+    (t) => t.feature_id === feature.id && t.title === title && t.status !== "done" && t.status !== "cancelled"
+  );
+  if (open) return { task: open, existing: true };
+  const created = createTask({
+    project_id: project.id,
+    feature_id: feature.id,
+    title,
+    description: buildTaskLandConflictPrompt(task.work_branch, baseBranch, conflicts),
+    priority: "hi",
+    suggested: true,
+  });
+  return { task: created, existing: false };
 }
 
 /**

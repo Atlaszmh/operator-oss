@@ -47,6 +47,7 @@ vi.mock("@/lib/github", async (importOriginal) => ({
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { ensureAutopilot, sweep, GATE_STALL_MS } from "@/lib/autopilot";
+import { isResolutionTask } from "@/lib/featureSync";
 import { startInitialTurn } from "@/lib/runner";
 import { getDb } from "@/lib/db";
 import { createFeatureBranch } from "@/lib/git";
@@ -63,6 +64,7 @@ import {
   setTaskDeps,
   updateTask,
   setSetting,
+  featureMembers,
 } from "@/lib/store";
 import { publishGlobal } from "@/lib/events";
 
@@ -518,4 +520,87 @@ describe("self-healing", () => {
     await sweep(project.id);
     await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
   }, 30_000);
+});
+
+// The two ways a pass used to make everyone wait: an unresolvable merge that
+// dead-ended the feature, and a settled task that couldn't be gated until every
+// gate already in flight had drained.
+describe("conflict hand-off", () => {
+  it("files a resolver task instead of dead-ending, and parks the member behind it", async () => {
+    const { repo, project, feature, tasks } = await planFixture(1);
+    const t = tasks[0];
+    // Out of retries already, so the first conflict is the one that decides.
+    updateTask(t.id, { gate_attempts: AUTOPILOT_ATTEMPTS });
+    ensureAutopilot();
+
+    // Let it start and write its file, but hold the gate so we can plant a
+    // genuinely conflicting commit on the feature branch underneath it.
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    gateMock.mockImplementation(async () => { await held; return { ok: true, feedback: "", testsRan: true, reviewRan: true }; });
+    const pass = sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+
+    // Same path, different content, committed on the feature branch: the task's
+    // merge into it can only conflict.
+    const git = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "pipe" });
+    git("checkout", feature.branch);
+    fs.writeFileSync(`${repo}/${t.id}.txt`, "theirs\n");
+    git("add", "-A");
+    git("commit", "-m", "conflicting change");
+    git("checkout", "main");
+
+    release();
+    await pass;
+
+    // The member is parked with its own way back, NOT dead-ended…
+    const parked = getTask(t.id)!;
+    expect(parked.blocked_reason).toMatch(/could not resolve it/i);
+    expect(parked.gate_retry_at).toBeGreaterThan(Date.now());
+    // …and a resolver was filed into the same feature, briefed the other way round.
+    const resolver = featureMembers(feature.id).find((m) => m.title.startsWith("Resolve: land"));
+    expect(resolver).toBeTruthy();
+    expect(resolver!.priority).toBe("hi");
+    // Filed as a suggestion, then adopted by this armed feature on the re-loop —
+    // so on autopilot the conflict gets resolved with nobody clicking anything.
+    expect(resolver!.suggested).toBe(0);
+    expect(resolver!.description).toContain(parked.work_branch);
+  }, 60_000);
+
+  it("never files a resolver for a resolver — that is an unbounded task factory", () => {
+    expect(isResolutionTask("Resolve: land orch/task-9")).toBe(true);
+    expect(isResolutionTask("Add the settings page")).toBe(false);
+  });
+});
+
+describe("continuous gating", () => {
+  it("gates a task that settles mid-pass without waiting for the in-flight gate", async () => {
+    const { project, tasks } = await planFixture(2);
+    const [a, b] = tasks;
+    // A is settled and its gate is slow. B hands back only after the pass is
+    // already under way — it used to wait for A's whole review.
+    updateTask(a.id, { started: 1, status: "in_progress" });
+    let releaseA!: () => void;
+    const heldA = new Promise<void>((r) => { releaseA = r; });
+    gateMock.mockImplementation(async (task: { id: string }) => {
+      if (task.id === a.id) await heldA;
+      return { ok: true, feedback: "", testsRan: true, reviewRan: true };
+    });
+    ensureAutopilot();
+
+    const pass = sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 10_000 });
+
+    // B settles the way a real turn ending settles it: row first, then publish.
+    updateTask(b.id, { started: 1, status: "in_progress", running: 0 });
+    publishGlobal(b.id, { type: "task_updated" });
+
+    // Gated while A is still held — the entire point.
+    await vi.waitFor(
+      () => expect(gateMock.mock.calls.some((c) => (c[0] as { id: string }).id === b.id)).toBe(true),
+      { timeout: 10_000 }
+    );
+    releaseA();
+    await pass;
+  }, 40_000);
 });

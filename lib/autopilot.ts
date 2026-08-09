@@ -16,7 +16,14 @@
 // sweep() is idempotent and serialized per project, so the two triggers
 // overlapping is harmless.
 
-import { syncFeaturesToBase, syncTasksToBase, catchUpWorktree, publishProjectBranch } from "./featureSync";
+import {
+  syncFeaturesToBase,
+  syncTasksToBase,
+  catchUpWorktree,
+  publishProjectBranch,
+  fileLandResolutionTask,
+  isResolutionTask,
+} from "./featureSync";
 import {
   getProject,
   getFeature,
@@ -78,6 +85,14 @@ const MAX_SWEEP_PASSES = 12;
 export const TRANSIENT_RETRY_MS = 10 * 60 * 1000;
 
 /**
+ * The backoff for a member parked behind a conflict RESOLVER task. Longer than
+ * the generic one because what it is waiting for is another task's entire
+ * lifecycle (start → work → gate → merge); retrying sooner just pays for a
+ * fresh review to rediscover the same conflict.
+ */
+export const CONFLICT_HANDOFF_RETRY_MS = 30 * 60 * 1000;
+
+/**
  * The subscription window that is currently refusing turns, if any.
  *
  * The driver already records every rate_limit_event it sees (recordRateLimit),
@@ -102,15 +117,53 @@ export function usageBlockedUntil(): number {
 declare global {
   // eslint-disable-next-line no-var
   var __orchAutopilot:
-    | { armed: boolean; running: Set<string>; again: Set<string>; usageNotedUntil: number }
+    | {
+        armed: boolean;
+        running: Set<string>;
+        again: Set<string>;
+        usageNotedUntil: number;
+        waiters: Map<string, (() => void)[]>;
+      }
     | undefined;
 }
 
 // HMR-surviving controller state, same pattern as lib/events.ts / lib/abort.ts.
 function state() {
   if (!global.__orchAutopilot)
-    global.__orchAutopilot = { armed: false, running: new Set(), again: new Set(), usageNotedUntil: 0 };
+    global.__orchAutopilot = {
+      armed: false,
+      running: new Set(),
+      again: new Set(),
+      usageNotedUntil: 0,
+      waiters: new Map(),
+    };
   return global.__orchAutopilot;
+}
+
+/**
+ * Resolves when something happens that could give the IN-FLIGHT pass new work.
+ *
+ * The gating loop would otherwise only re-check for newly-settled members when
+ * one of its own gates finished — so a task that handed back thirty seconds
+ * into someone else's 20-minute review still waited out that review. A pass
+ * already learns about new work (a concurrent sweep() marks the project dirty);
+ * this just lets it be woken by that instead of discovering it later.
+ */
+function dirtySignal(projectId: string): Promise<"dirty"> {
+  const st = state();
+  return new Promise((resolve) => {
+    const list = st.waiters.get(projectId) ?? [];
+    list.push(() => resolve("dirty"));
+    st.waiters.set(projectId, list);
+  });
+}
+
+function wakeWaiters(projectId: string): void {
+  const st = state();
+  const waiting = st.waiters.get(projectId);
+  if (!waiting?.length) return;
+  st.waiters.delete(projectId);
+  for (const w of waiting) w();
 }
 
 /**
@@ -200,6 +253,9 @@ export async function sweep(projectId: string): Promise<void> {
     if (!st.again.has(projectId) && hasArmedFeature(projectId))
       trace("autopilot", `DEFERRED project=${projectId} — a sweep is already running; it will re-loop`);
     st.again.add(projectId);
+    // …and tell that pass now, so a member that just handed back is gated
+    // immediately rather than when some other member's review happens to end.
+    wakeWaiters(projectId);
     return;
   }
   st.running.add(projectId);
@@ -296,51 +352,47 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
     publishGlobal(t.id, { type: "task_updated" });
   }
 
-  // 1. Start ready members FIRST, up to the cap. Starting is the cheap half
-  //    (claim + worktree + title); the gates below are minutes of tests plus a
-  //    reviewer turn, and they used to run ahead of this — so a task whose
-  //    blocker landed on a PREVIOUS pass sat startable behind every other
-  //    member's gate (measured on a real queue: 16 minutes of dead air with
-  //    free slots the whole time). A blocker that lands in THIS pass's gate
-  //    step re-dirties the project, so its dependents start on the re-loop
-  //    seconds later, not behind the next heartbeat.
+  // 1 + 2. Start what can start, then gate what has finished — CONTINUOUSLY,
+  //        not as two batched phases.
   //
-  //    Settled members count as live: each is mid-pipeline, and a failed gate
-  //    becomes a feedback turn, so ignoring them would overshoot the cap by
-  //    one per failure.
-  const live = featureMembers(feature.id).filter((t) => t.running || hasTurn(t.id) || isSettledForGating(t)).length;
-  let slots = Math.max(0, AUTOPILOT_CONCURRENCY - live);
-  for (const t of readyMembers(feature.id)) {
-    if (slots <= 0) break;
-    // A started task belongs to the gating path below, not to launching.
-    if (t.started) continue;
-    const res = await startInitialTurn(t, project);
-    if (!res.ok && res.status !== 409) {
-      // Launch failures are usually about the machine, not the plan (a worktree
-      // that couldn't be cut, a busy repo), so this one retries itself too.
-      block(t, `Autopilot could not start this task: ${res.error}`, { retryInMs: TRANSIENT_RETRY_MS });
-      continue;
-    }
-    trace("autopilot", `START task=${t.id} "${t.title}" model=${t.model ?? "default"} feature="${feature.name}"`);
-    slots--;
-  }
+  //        Starting is the cheap half (claim + worktree + title); a gate is
+  //        minutes of tests plus a reviewer turn. Gating first meant a task
+  //        whose blocker landed on a previous pass sat startable behind every
+  //        other member's gate — 16 minutes of dead air with free slots the
+  //        whole time, measured. And collecting the settled set ONCE meant a
+  //        task that finished thirty seconds into a pass waited for every gate
+  //        already in flight to drain before its own could even begin; with
+  //        reviews running 8-20 minutes on a real project, that is most of the
+  //        latency the user actually feels.
+  //
+  //        So: gates are launched as members settle, each verdict is applied
+  //        the moment it arrives (landings stay serial — they share the
+  //        integration branch), and starting is re-checked right after every
+  //        verdict, so a merge that unblocks a dependent starts it immediately
+  //        rather than on the next pass.
+  await startReady(project, feature);
 
-  // 2. Gate everything that finished a turn — in parallel: each gate is that
-  //    task's own worktree suite plus its own reviewer one-shot, so they share
-  //    nothing, and serial gates were the sweep's whole wall-clock whenever two
-  //    members finished together. Landing stays serial: every merge targets
-  //    the same integration branch.
-  const settled = featureMembers(feature.id).filter(isSettledForGating);
-  const gated = await Promise.all(
-    settled.map(async (t) => {
-      const t0 = Date.now();
-      const verdict = await runGate(t, project, feature);
-      const word = verdict.inconclusive ? "inconclusive" : verdict.ok ? "pass" : "fail";
-      trace("autopilot", `GATE-DONE task=${t.id} verdict=${word} in ${secs(t0)}`);
-      return [t, verdict] as const;
-    })
-  );
-  for (const [t, verdict] of gated) await applyVerdict(project, feature, t, verdict);
+  // Gated once per pass each: applyVerdict deliberately leaves an inconclusive
+  // task untouched (so it retries on the NEXT sweep, uncharged), which without
+  // this would make it instantly re-eligible and spin the loop forever.
+  const gatedThisPass = new Set<string>();
+  const inFlight = new Map<string, Promise<readonly [Task, GateVerdict]>>();
+  for (;;) {
+    for (const t of featureMembers(feature.id).filter(isSettledForGating)) {
+      if (inFlight.has(t.id) || gatedThisPass.has(t.id)) continue;
+      gatedThisPass.add(t.id);
+      inFlight.set(t.id, gateOne(project, feature, t));
+    }
+    if (!inFlight.size) break;
+    // Woken by whichever comes first: a verdict, or news that the project has
+    // new work worth re-scanning for.
+    const winner = await Promise.race([...inFlight.values(), dirtySignal(project.id)]);
+    if (winner === "dirty") continue;
+    const [t, verdict] = winner;
+    inFlight.delete(t.id);
+    await applyVerdict(project, feature, t, verdict);
+    await startReady(project, feature);
+  }
 
   // 3. Everything landed → hand the feature back to the user as a PR.
   await maybeOpenPr(project, feature);
@@ -408,6 +460,54 @@ function reportDisposition(feature: Feature): void {
   }
   if (suggested.length)
     traceWarn("autopilot", `  ${suggested.length} suggested task(s) need Approve plan before autopilot will run them`);
+}
+
+/**
+ * Launch every member that can start right now, up to the concurrency cap.
+ *
+ * Settled members count as live: each is mid-pipeline (its gate is running, or
+ * about to), and a failed gate becomes a feedback turn — ignoring them would
+ * overshoot the cap by one per member in flight.
+ */
+async function startReady(project: Project, feature: Feature): Promise<void> {
+  const live = featureMembers(feature.id).filter((t) => t.running || hasTurn(t.id) || isSettledForGating(t)).length;
+  let slots = Math.max(0, AUTOPILOT_CONCURRENCY - live);
+  if (slots <= 0) return;
+  for (const t of readyMembers(feature.id)) {
+    if (slots <= 0) break;
+    // A started task belongs to the gating path, not to launching.
+    if (t.started) continue;
+    const res = await startInitialTurn(t, project);
+    if (!res.ok && res.status !== 409) {
+      // Launch failures are usually about the machine, not the plan (a worktree
+      // that couldn't be cut, a busy repo), so this one retries itself too.
+      block(t, `Autopilot could not start this task: ${res.error}`, { retryInMs: TRANSIENT_RETRY_MS });
+      continue;
+    }
+    trace("autopilot", `START task=${t.id} "${t.title}" model=${t.model ?? "default"} feature="${feature.name}"`);
+    slots--;
+  }
+}
+
+/**
+ * One member's gate, resolving to its verdict rather than throwing — the race
+ * loop above must never be taken down by one task's failure, and a gate that
+ * died tells us nothing about the diff, which is exactly `inconclusive`.
+ */
+async function gateOne(project: Project, feature: Feature, t: Task): Promise<readonly [Task, GateVerdict]> {
+  const t0 = Date.now();
+  try {
+    const verdict = await runGate(t, project, feature);
+    const word = verdict.inconclusive ? "inconclusive" : verdict.ok ? "pass" : "fail";
+    trace("autopilot", `GATE-DONE task=${t.id} verdict=${word} in ${secs(t0)}`);
+    return [t, verdict] as const;
+  } catch (e) {
+    traceWarn("autopilot", `GATE-THREW task=${t.id} after ${secs(t0)}: ${(e as Error).message}`);
+    return [
+      t,
+      { ok: false, inconclusive: true, testsRan: false, reviewRan: false, feedback: `The gate threw: ${(e as Error).message}` },
+    ] as const;
+  }
 }
 
 /**
@@ -538,7 +638,7 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   if (preSync.conflicts.length) {
     const attempts = task.gate_attempts + 1;
     if (attempts > AUTOPILOT_ATTEMPTS) {
-      block(task, `Catching up to ${base} conflicts in ${preSync.conflicts.length} file(s), and the agent could not resolve it.`);
+      handOffConflict(project, feature, task, base, preSync.conflicts, `catching up to ${base}`);
       return;
     }
     updateTask(task.id, { gate_attempts: attempts });
@@ -578,7 +678,7 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
     if (result.conflicts?.length) {
       const attempts = task.gate_attempts + 1;
       if (attempts > AUTOPILOT_ATTEMPTS) {
-        block(task, `Merging into ${base} conflicts in ${result.conflicts.length} file(s), and the agent could not resolve it.`);
+        handOffConflict(project, feature, task, base, result.conflicts, `merging into ${base}`);
         return;
       }
       updateTask(task.id, { gate_attempts: attempts });
@@ -628,6 +728,52 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   trace("autopilot", `MERGED task=${task.id} into ${base} in ${secs(t0)}`);
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
+}
+
+/**
+ * A member's merge is out of retries. Hand it to a fresh resolver task instead
+ * of dead-ending the feature.
+ *
+ * The old behaviour terminal-blocked here, and a terminal block is invisible to
+ * both halves of the scheduler — so one unresolvable merge stopped everything
+ * downstream until a human intervened. Observed twice in a single run, same six
+ * files, both tasks eventually marked done by hand.
+ *
+ * The member is parked TRANSIENTLY rather than blocked outright: when the
+ * resolver lands, the member's commits are already on the base, so its next
+ * merge attempt is a no-op that closes it out with no human in the loop. The
+ * backoff is long because the thing it is waiting for is another task's whole
+ * lifecycle — a short one would just re-gate (and re-review) into the same
+ * conflict every few minutes.
+ */
+function handOffConflict(
+  project: Project,
+  feature: Feature,
+  task: Task,
+  base: string,
+  conflicts: string[],
+  what: string
+): void {
+  const detail = `${what} conflicts in ${conflicts.length} file(s), and the agent could not resolve it`;
+  // A resolver that conflicts must not file a resolver for itself, and a task
+  // with no branch of its own has nothing for a resolver to merge.
+  if (isResolutionTask(task.title) || !task.work_branch) {
+    block(task, `${detail}. This one needs you.`);
+    return;
+  }
+  const { task: resolver, existing } = fileLandResolutionTask(project, feature, task, base, conflicts);
+  trace(
+    "autopilot",
+    `CONFLICT-HANDOFF task=${task.id} → resolver=${resolver.id} "${resolver.title}"${existing ? " (already filed)" : ""}`
+  );
+  if (!existing) publishGlobal(resolver.id, { type: "task_updated" });
+  block(
+    task,
+    `${detail}.\n\nAutopilot filed "${resolver.title}" to land this work from the other side — ` +
+      `it merges \`${task.work_branch}\` into \`${base}\` in its own worktree, and once it lands this task ` +
+      `closes itself out. Answering here takes it back by hand instead.`,
+    { retryInMs: CONFLICT_HANDOFF_RETRY_MS }
+  );
 }
 
 /** Every member landed → push the integration branch and open the PR (gate 2). */

@@ -254,6 +254,32 @@ export function buildConflictPrompt(baseBranch: string, conflicts: string[]): st
  * anything to resolve. Same no-commit rule, same reason: the merge lands
  * through review + the normal merge path, not from inside the session.
  */
+/**
+ * The mirror of the above, one level down: a member task's own branch cannot be
+ * landed into its base, and the task's agent already failed to reconcile it
+ * from its own worktree. This brief belongs to a FRESH task whose worktree is
+ * cut from the BASE, so the merge runs in the direction the landing actually
+ * needs — base ← work — with a clean context that isn't carrying whatever the
+ * original session got tangled in.
+ */
+export function buildTaskLandConflictPrompt(workBranch: string, baseBranch: string, conflicts: string[]): string {
+  const files = conflicts.map((f) => `  - ${f}`).join("\n");
+  return [
+    `\`${workBranch}\` holds finished work that cannot be merged into \`${baseBranch}\` — the merge conflicts, and`,
+    `the session that wrote it could not reconcile it. Your worktree is cut from \`${baseBranch}\`, so resolving`,
+    `the merge here is what lands that work.`,
+    ``,
+    `1. Run \`git merge ${workBranch}\`. It will stop on conflicts in:`,
+    files,
+    `2. Resolve every conflict: remove all markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) and produce a correct`,
+    `   merged result that preserves the intent of BOTH sides — the work on \`${workBranch}\` is finished and`,
+    `   reviewed, so do not drop it, and do not discard what is already on \`${baseBranch}\` either. Read the`,
+    `   surrounding code; where the two changes are independent, keep both.`,
+    `3. Do NOT run \`git commit\` or \`git merge --continue\` — leave the files clean and marker-free. The merge`,
+    `   is reviewed and landed through the normal merge flow, not from this session.`,
+  ].join("\n");
+}
+
 export function buildFeatureConflictTaskPrompt(featureBranch: string, baseBranch: string, conflicts: string[]): string {
   const files = conflicts.map((f) => `  - ${f}`).join("\n");
   return [
