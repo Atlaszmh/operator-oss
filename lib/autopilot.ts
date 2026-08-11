@@ -33,6 +33,7 @@ import {
   updateTask,
   updateFeature,
   addMessage,
+  listMessages,
   recordTaskMerge,
   taskBaseBranch,
   featureMembers,
@@ -816,11 +817,32 @@ async function maybeOpenPr(project: Project, feature: Feature): Promise<void> {
     updateFeature(feature.id, { pr_url: res.url });
     return;
   }
-  // The work is safe on the integration branch either way, but a silent failure
-  // here would leave the feature looking finished and going nowhere. Surface it
-  // on the last member so it reaches the "needs you" pill rather than a log.
+
+  // EVERY MEMBER LANDED, SO THE FEATURE SUCCEEDED. Whatever happened here, the
+  // work is on the integration branch and the plan is finished — a PR that
+  // could not be opened is a missing artifact, not unfinished work. This used
+  // to block() the last member, which set awaiting_input and put a fully-landed
+  // feature in the "N need you" pill; nine of them accumulated on one project
+  // and every one had to be dismissed by hand. Reported, never escalated.
+  //
+  // Not a failure at all: the branch is already contained in the project
+  // branch, so there is nothing left to review. Usually a Ship that beat this
+  // step — the two are independent and race whenever a feature is shipped by
+  // hand while its last member is still gating. The finish line, reached early.
+  if (res.nothingToOpen) {
+    trace("autopilot", `PR-SKIPPED feature="${feature.name}" — ${res.error}`);
+    return;
+  }
+
+  traceWarn("autopilot", `PR-FAILED feature="${feature.name}" — ${res.error ?? "unknown error"}`);
   const last = members[members.length - 1];
-  if (last) block(last, `Every task landed, but opening the feature PR failed: ${res.error ?? "unknown error"}`);
+  if (last)
+    noteOnce(
+      last,
+      `⚠ Every task landed, so this feature is finished and its work is safe on \`${feature.branch}\` — ` +
+        `but autopilot could not open the feature PR: ${res.error ?? "unknown error"}\n\n` +
+        `Nothing here needs redoing. Use "Open PR" on the feature once that is fixed.`
+    );
 }
 
 // ---------- small helpers ----------
@@ -835,6 +857,20 @@ async function sendTurn(project: Project, task: Task, text: string): Promise<voi
   } catch (e) {
     block(task, `Autopilot could not start the follow-up turn: ${(e as Error).message}`);
   }
+}
+
+/**
+ * note(), but only the first time.
+ *
+ * maybeOpenPr re-runs on every sweep of a finished feature (its members are all
+ * done, so nothing else stops it), and a line the user has already read is
+ * noise on a 60-second heartbeat. Same idempotence block() gets for free from
+ * comparing blocked_reason — this is the version for a notice that deliberately
+ * doesn't set one.
+ */
+function noteOnce(task: Task, text: string): void {
+  if (listMessages(task.id).some((m) => m.role === "system" && m.content === text)) return;
+  note(task, text);
 }
 
 /** A quiet system line in the transcript: what autopilot did, in the user's view. */

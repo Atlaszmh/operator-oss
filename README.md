@@ -115,6 +115,8 @@ The queue never idles behind its own bookkeeping: a task whose dependencies have
 
 **You merge the PR.** When the last task lands, the integration branch is pushed and a PR opened against your project branch, its body assembled from the approved spec and every task's outcome line. Review it on GitHub, where CI and your review tools already live.
 
+The PR is the artifact, never the gate. If you ship the feature yourself first — the Ship button merges the integration branch locally, and it can beat autopilot's last member out of the gate — there is nothing left to open a PR for, and that is treated as the finish line rather than a failure. Same when a PR simply can't be opened (no `gh`, a dead login): the feature is still finished, its work is still on the integration branch, and it says so in the task's transcript instead of appearing in "N need you". Open one later from the feature's **Open PR** button if you want it.
+
 **When it gets stuck**, the task shows up in the "N need you" pill you already watch, with the reason in full on the feature page. Reply to it — answering clears the block and it picks the task back up. A stuck task never stalls its siblings; only work that depended on it waits.
 
 **Start in shadow mode.** `ORCH_FEATURE_AUTOPILOT_SHADOW` is **on by default**: the full gate runs and records its verdict, but nothing merges without you. Leave it on until you've watched the reviewer judge a handful of tasks you'd also have judged. A reviewer that rubber-stamps has automated a rubber stamp, and this is the cheap way to find that out. Set it to `0` when you trust it.

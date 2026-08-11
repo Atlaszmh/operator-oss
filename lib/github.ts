@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 import { PROJECTS_DIR } from "./config";
+import { worktreeSyncStatus } from "./git";
 
 const run = promisify(execFile);
 
@@ -321,6 +322,11 @@ export interface CreatePrResult {
   ok: boolean;
   url?: string;
   existing?: boolean; // an open PR for this branch already existed — the push updated it
+  // The base already contains every commit on the branch, so there is no PR to
+  // open. Distinguished from a failure because it usually means the OPPOSITE of
+  // one: the branch already landed. Callers that report failures should report
+  // this differently (see maybeOpenPr in lib/autopilot.ts).
+  nothingToOpen?: boolean;
   error?: string;
 }
 
@@ -404,6 +410,24 @@ export async function createBranchPr(input: {
   body: string;
 }): Promise<CreatePrResult> {
   const { cwd: worktreePath, branch: workBranch, baseBranch, title, body } = input;
+
+  // Is there anything to open a PR FOR? GitHub refuses a head branch its base
+  // already contains — "No commits between <base> and <head>" — and that is a
+  // normal end state rather than a fault: the branch was merged by something
+  // else first (a Ship that beat autopilot's PR step), or its members landed
+  // nothing the base didn't already have. Asked FIRST, before gh and before the
+  // push, because it is local, free, and makes every later step pointless.
+  //
+  // `worktreePath` as repoPath is deliberate: refs are shared across a repo's
+  // worktrees, so the branch arithmetic is identical from either, and only the
+  // dirty check (not used here) needs a real working tree.
+  const cmp = await worktreeSyncStatus({ repoPath: worktreePath, workBranch, baseBranch });
+  if (cmp.baseTip && cmp.ahead === 0)
+    return {
+      ok: false,
+      nothingToOpen: true,
+      error: `${workBranch} is already merged into ${baseBranch} — there are no commits left to open a pull request for`,
+    };
 
   const st = await ghStatus();
   if (!st.installed)

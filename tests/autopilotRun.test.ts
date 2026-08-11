@@ -65,6 +65,7 @@ import {
   updateTask,
   setSetting,
   featureMembers,
+  listMessages,
 } from "@/lib/store";
 import { publishGlobal } from "@/lib/events";
 
@@ -330,6 +331,48 @@ describe("autopilot scheduler", () => {
     const blocked = tasks.map((t) => getTask(t.id)!).filter((t) => t.blocked_reason);
     expect(blocked).toHaveLength(1);
     expect(blocked[0].blocked_reason).toContain("determinism BROKEN");
+  }, 40_000);
+
+  // A finished feature is finished. Nine of them landed every task, got merged
+  // into main by a hand-clicked Ship that beat this step, and were then flagged
+  // "needs you" because gh — correctly — refused to open a PR for a branch main
+  // already contained. The PR is an artifact of the ship, not a gate on it.
+  it("does not flag a finished feature when there is nothing left to open a PR for", async () => {
+    const { project, feature, tasks } = await planFixture(2);
+    prMock.mockResolvedValue({
+      ok: false,
+      nothingToOpen: true,
+      error: `${feature.branch} is already merged into main — there are no commits left to open a pull request for`,
+    });
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(prMock).toHaveBeenCalled(), { timeout: 20_000 });
+    const rows = tasks.map((t) => getTask(t.id)!);
+    expect(rows.every((t) => t.status === "done")).toBe(true);
+    expect(rows.every((t) => t.awaiting_input === 0)).toBe(true);
+    expect(rows.every((t) => t.blocked_reason === "")).toBe(true);
+  }, 40_000);
+
+  // A PR that genuinely couldn't be opened (no gh, dead login, rejected push)
+  // is still not unfinished work — it is a missing artifact, said once.
+  it("reports a failed PR in the transcript without blocking the feature", async () => {
+    const { project, tasks } = await planFixture(1);
+    prMock.mockResolvedValue({ ok: false, error: "gh is not logged in to GitHub" });
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(prMock).toHaveBeenCalled(), { timeout: 20_000 });
+    const t = getTask(tasks[0].id)!;
+    expect(t.status).toBe("done");
+    expect(t.awaiting_input).toBe(0);
+    expect(t.blocked_reason).toBe("");
+    const said = () =>
+      listMessages(t.id).filter((m) => m.role === "system" && m.content.includes("could not open the feature PR"));
+    expect(said()).toHaveLength(1);
+    // Said ONCE: maybeOpenPr runs again on every sweep of a finished feature.
+    await sweep(project.id);
+    expect(said()).toHaveLength(1);
   }, 40_000);
 
   it("opens the PR once the feature branch is green", async () => {
