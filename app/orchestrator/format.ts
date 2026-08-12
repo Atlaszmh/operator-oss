@@ -209,6 +209,42 @@ export const isAwaiting = (t: TaskRow) =>
   t.status === "in_progress" && !!t.awaiting_input;
 
 /**
+ * In the gate: the agent has handed back and autopilot is running the project's
+ * tests plus an independent reviewer before it merges.
+ *
+ * This state had no name, and looked exactly like a stalled task — "In progress"
+ * with a finished-sounding outcome line under it and nothing moving, for the
+ * five to ten minutes a review actually takes. Nothing was wrong; there was
+ * simply no word for what it was doing.
+ *
+ * Derived, not stored, for the same reason featureState is: a column would have
+ * to be written from every path that ends a turn, starts a gate, or applies a
+ * verdict, and would go wrong the first time one was missed. This mirrors
+ * isSettledForGating() in lib/autopilot.ts — the server-side predicate that
+ * decides the same thing — minus its hasTurn() check, which is in-process
+ * memory the client can't see. `running` covers that case a beat later.
+ *
+ * `armed` is required and never assumed: only a member of a feature running
+ * unattended gets gated. A hand-driven task that ends its turn raises
+ * awaiting_input instead, and reads "Needs your input" — which it is.
+ */
+export const isGating = (t: TaskRow, armed: boolean, running = !!t.running) =>
+  armed &&
+  !running &&
+  !!t.started &&
+  !t.suggested &&
+  !t.awaiting_input &&
+  !t.blocked_reason &&
+  t.status !== "done" &&
+  t.status !== "cancelled" &&
+  t.status !== "on_hold";
+
+export const GATING_LABEL = "Reviewing";
+/** Why the task looks idle when it isn't — the whole point of the label. */
+export const GATING_HINT =
+  "Handed back — running the test suite and an independent code review before this merges. Usually a few minutes.";
+
+/**
  * How far along a feature is, derived from the rollup listFeatures() computes.
  *
  * Derived, not stored, for the same reason the counts it reads are: a status

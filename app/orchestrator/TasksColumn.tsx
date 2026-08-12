@@ -2,31 +2,37 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
-import { isAwaiting, modelLabel, relTime, featureState, isFinished, FEATURE_STATE_LABEL } from "./format";
+import { isAwaiting, isGating, modelLabel, relTime, featureState, isFinished, FEATURE_STATE_LABEL, GATING_LABEL, GATING_HINT } from "./format";
 import { SLABEL, AWAIT_LABEL, SEARCH_MIN, STATUSES, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel, capsFor } from "./agents";
 import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip } from "./shared";
 import { TaskCardSkeleton } from "./Layout";
 import { TaskBoard } from "./TaskBoard";
 
-function TaskCard({ task, agents, selected, running, blockedBy, onSelect, featureName, featureColor, onOpenFeature }: { task: TaskRow; agents: AgentsBundle; selected: boolean; running: boolean; blockedBy?: string[]; onSelect: () => void; featureName?: string; featureColor?: string; onOpenFeature?: () => void }) {
+function TaskCard({ task, agents, selected, running, armed, blockedBy, onSelect, featureName, featureColor, onOpenFeature }: { task: TaskRow; agents: AgentsBundle; selected: boolean; running: boolean; armed?: boolean; blockedBy?: string[]; onSelect: () => void; featureName?: string; featureColor?: string; onOpenFeature?: () => void }) {
   const sessionCount = task.started ? task.generation : Math.max(0, task.generation - 1);
   const awaiting = isAwaiting(task);
+  const gating = isGating(task, !!armed, running);
   const blocked = !!blockedBy?.length && !task.started;
   // Awaiting wins over running: a turn parked on a question is live but really
   // waiting on you, so it should read "waiting", not "working".
   const activity = awaiting ? `waiting on you · ${relTime(task.updated_at)}`
     : running ? "live · working"
+    // Since the turn ended, not since the review started — the gate keeps no
+    // timestamp of its own, and "handed back 6m ago" is the honest reading.
+    : gating ? `reviewing · handed back ${relTime(task.updated_at)}`
     : task.status === "done" ? `done · ${relTime(task.updated_at)}`
     : task.status === "cancelled" ? `cancelled · ${relTime(task.updated_at)}`
     : task.started ? relTime(task.updated_at) : "not started";
   return (
     <button className={`task ${selected ? "sel" : ""} ${awaiting ? "awaiting" : ""}`} onClick={onSelect}>
       <div className="task-top">
-        <StatusDot status={task.status} running={running} awaiting={awaiting} />
+        <StatusDot status={task.status} running={running} awaiting={awaiting} gating={gating} />
         {task.key && <span className="key-chip">{task.key}</span>}
         <span className="ttitle">{task.title}</span>
-        <span className={`slabel ${awaiting ? "await" : ""}`}>{awaiting ? AWAIT_LABEL : SLABEL[task.status]}</span>
+        <span className={`slabel ${awaiting ? "await" : ""}`} title={gating ? GATING_HINT : undefined}>
+          {awaiting ? AWAIT_LABEL : gating ? GATING_LABEL : SLABEL[task.status]}
+        </span>
         <AgentBadge label={agentLabel(agents, task.agent)} multi={agents.agents.length > 1} />
         {/* Its own span, not a prop on AgentBadge — that renders null on
             single-agent installs and would take the model badge with it. */}
@@ -70,6 +76,7 @@ function TaskGroup({ label, tasks, agents, selTaskId, running, blockedBy, onSele
       <TaskCard
         key={t.id} task={t} agents={agents} selected={t.id === selTaskId}
         running={running.has(t.id)} blockedBy={blockedBy.get(t.id)} onSelect={() => onSelect(t.id)}
+        armed={!!f?.autopilot}
         featureName={f?.name} featureColor={f?.color || undefined}
         onOpenFeature={f && onOpenFeature ? () => onOpenFeature(f.id) : undefined}
       />
@@ -215,7 +222,7 @@ function FeatureGroup({ feature, tasks, agents, selTaskId, running, blockedBy, a
       {!collapsed && tasks.map((t) => (
         <TaskCard
           key={t.id} task={t} agents={agents} selected={t.id === selTaskId}
-          running={running.has(t.id)} blockedBy={blockedBy.get(t.id)} onSelect={() => onSelect(t.id)}
+          running={running.has(t.id)} armed={!!feature.autopilot} blockedBy={blockedBy.get(t.id)} onSelect={() => onSelect(t.id)}
         />
       ))}
     </>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { jget, jsend, jstream } from "./api";
-import { isAwaiting, relTime, featureState, fmtDur, FEATURE_STATE_LABEL } from "./format";
+import { isAwaiting, isGating, relTime, featureState, fmtDur, FEATURE_STATE_LABEL, GATING_LABEL, GATING_HINT } from "./format";
 import { ErrNote, LoadNote, StatusDot } from "./shared";
 import { clientFeatures } from "@/lib/features";
 import { SLABEL, type FeatureBranchResp, type FeatureRow, type ProjectRow, type TaskRow } from "./types";
@@ -208,11 +208,16 @@ export function FeatureLanding({ feature, project, features, tasks, onSelectTask
                 {tasks.map((t) => (
                   <button key={t.id} className="feat-task" onClick={() => onSelectTask(t.id)}>
                     <div className="ft-row">
-                      <StatusDot status={t.status} awaiting={isAwaiting(t)} />
+                      <StatusDot status={t.status} awaiting={isAwaiting(t)} gating={isGating(t, !!feature.autopilot)} />
                       {t.key && <span className="key-chip">{t.key}</span>}
                       <span className="ft-title">{t.title}</span>
                       {t.suggested === 1 && <span className="ft-sug">suggested</span>}
-                      <span className="ft-status">{isAwaiting(t) ? "Needs you" : SLABEL[t.status]}</span>
+                      {/* This row is where "In progress, and here is the outcome
+                          it already reported" read as a stalled task: the member
+                          is in the gate, which now says so. */}
+                      <span className="ft-status" title={isGating(t, !!feature.autopilot) ? GATING_HINT : undefined}>
+                        {isAwaiting(t) ? "Needs you" : isGating(t, !!feature.autopilot) ? GATING_LABEL : SLABEL[t.status]}
+                      </span>
                       <span className="ft-time">{relTime(t.updated_at)}</span>
                     </div>
                     {t.outcome && <div className="ft-outcome">{t.outcome}</div>}

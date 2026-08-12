@@ -5,17 +5,22 @@ import { createPortal } from "react-dom";
 import type { Priority, Status } from "@/lib/types";
 import { Icon, AgentMark } from "../icons";
 import { SCLS, SLABEL, AWAIT_LABEL } from "./types";
+import { GATING_HINT } from "./format";
 
-export function StatusDot({ status, running, awaiting, lg }: { status: Status; running?: boolean; awaiting?: boolean; lg?: boolean }) {
+export function StatusDot({ status, running, awaiting, gating, lg }: { status: Status; running?: boolean; awaiting?: boolean; gating?: boolean; lg?: boolean }) {
   // Signal language (mission-control): "needs your input" is an alert coral, a
   // *live* working session is blue (both pulse to draw the eye), and an idle
   // status falls back to its base color. Awaiting wins over running — a turn
   // parked on a question is technically live but it's really waiting on you.
+  //
+  // Gating keeps in_progress's own colour and borrows the pulse: the machine is
+  // working, so a static dot would be a lie, but it is not a live agent session
+  // and must not claim the blue that means one.
   const cls = awaiting ? "c" : running ? "b" : SCLS[status];
   return (
     <span
-      className={`sdot ${cls} ${lg ? "lg" : ""} ${awaiting || running ? "pulse" : ""}`}
-      title={awaiting ? AWAIT_LABEL : running ? "Live" : SLABEL[status]}
+      className={`sdot ${cls} ${lg ? "lg" : ""} ${awaiting || running || gating ? "pulse" : ""}`}
+      title={awaiting ? AWAIT_LABEL : running ? "Live" : gating ? GATING_HINT : SLABEL[status]}
     />
   );
 }
