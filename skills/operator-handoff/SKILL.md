@@ -1,6 +1,6 @@
 ---
 name: operator-handoff
-description: Use when a plan from this session should be built in the user's Operator instance — "hand this off to Operator", "send this to Operator", "file these tasks in Operator", "kick this off in my orchestrator" — or when the user wants planned work to run as parallel agent sessions instead of in this session.
+description: Use when a plan from this session should be built in the user's Operator instance — "hand this off to Operator", "send this to Operator", "file these tasks in Operator", "implement this plan in Operator and approve it to kick off", "kick this off in my orchestrator" — or when the user wants planned work to run as parallel agent sessions instead of in this session. Covers both filing the plan and approving it so autopilot starts building immediately.
 ---
 
 # Operator Handoff
@@ -31,7 +31,9 @@ Complete for a handoff — do not probe for other endpoints. All bodies JSON.
 | Feature chain (multi-feature plans) | `PATCH /api/features/{id}` `{depends_on: [featureIds]}` |
 | Create task | `POST /api/tasks` `{project_id, feature_id, title, description, priority, agent?, model, reasoning, suggested: true}` |
 | Task dependencies | `PATCH /api/tasks/{id}` `{depends_on: [taskIds]}` — **after** creating; ids from the POST responses, not keys |
-| Arm autopilot (offer only) | `POST /api/features/{id}/approve-plan` |
+| Approve the plan — starts the queue | `POST /api/features/{id}/approve-plan` |
+
+**On a Cloudflare-Access-gated instance**, none of the above is reachable without a CF Access service token — but the internal agent-tool paths authenticate on the app's own `SERVICE_TOKEN` (`x-service-token` header, against `http://localhost:<port>`, never the tunnel hostname) and cover the whole handoff: `POST /api/internal/agent-tools/suggest-feature` `{projectId, name, description, context, after}` · `suggest-task` `{projectId, feature, title, description, priority, model, reasoning, blocked_by}` · `approve-plan` `{projectId, feature}`. Differences that bite: `after`/`feature` take NAMES and `blocked_by` takes IDS (all inline, no PATCH pass); `suggest-feature` upserts by name but `suggest-task` always inserts, so a re-run duplicates every task.
 
 ## Field truths (get these right)
 
@@ -57,10 +59,10 @@ Fetch `GET /api/agents` at handoff time; never hardcode model names. Use a `conn
 1. Preflight; `GET /api/agents`.
 2. Resolve the project: match cwd's repo against `repo_path` **or name** (containerized instances see different paths than this machine — a name match is normal). No match → ask, offering to create one; `repo_path` must be the path *as Operator sees it* (browse `GET /api/fs?path=...` to find it).
 3. Distill the plan: feature name, spec → `context`, one-line `description`, tasks with self-contained briefs, deps, tier + reasoning each.
-4. **Show one confirmation table** (task × model/reasoning/priority/depends-on) and the feature spec destination. File nothing before the user confirms.
+4. **Show one confirmation table** (task × model/reasoning/priority/depends-on) and the feature spec destination. File nothing before the user confirms. **If the user already said to approve/kick off** ("…and approve it to kick off", "file it and start it"), say so in that same confirmation — "I'll file this and approve it, so it starts building immediately" — so approval rides the confirmation they are already giving. Do not re-ask afterwards.
 5. File: feature (409 → an identically-named feature exists; ask before reusing it) → tasks (capture `id` + `key`) → dependency PATCHes.
-6. Report the feature/task keys (`ABC-F1`, `ABC-T2`, from `key`) and link `$OPERATOR_URL`.
-7. Offer approve-plan: accepts every suggestion, cuts the integration branch, and — if the instance has autopilot enabled — starts the queue. On yes, POST it and report `branch` + `accepted`; a 400 means autopilot is off on that instance — surface its message verbatim, the suggestions remain fine to start by hand.
+6. Approve, if that was the agreed intent — POST approve-plan for the **head** feature. It accepts every suggestion, cuts the integration branch, arms autopilot and starts the queue. Otherwise **offer** it. A 400 means autopilot is off on that instance — surface its message verbatim; the suggestions are still fine to start by hand.
+7. Report the feature/task keys (`ABC-F1`, `ABC-T2`, from `key`), link `$OPERATOR_URL`, and when approved the `branch` + how many suggestions were `accepted`.
 
 ## Common mistakes
 

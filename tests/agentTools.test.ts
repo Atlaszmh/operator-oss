@@ -1,10 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import { createProject, getTask, getTaskDeps } from "@/lib/store";
+import {
+  createProject,
+  createFeature,
+  createTask,
+  featureMembers,
+  getFeature,
+  getTask,
+  getTaskDeps,
+  setFeatureDeps,
+  updateProject,
+} from "@/lib/store";
 import { createSuggestedTask, registerExposedService, resolveTitleRefs } from "@/lib/agentTools";
 import { POST as suggestTask } from "@/app/api/internal/agent-tools/suggest-task/route";
 import { POST as exposeService } from "@/app/api/internal/agent-tools/expose-service/route";
+import { POST as approvePlanRoute } from "@/app/api/internal/agent-tools/approve-plan/route";
 import { instanceServiceTokenOk } from "@/lib/cf-access.mjs";
+import { makeRepo } from "./helpers";
 
 function post(handler: (req: NextRequest) => Promise<Response>, url: string, body: unknown) {
   return handler(
@@ -157,6 +169,91 @@ describe("internal agent-tool endpoints", () => {
       });
       expect(res.status).toBe(400);
     }
+  });
+});
+
+// Gate 1 for a caller with no browser. The button's route is unreachable on an
+// Access-gated instance, so a session that had just filed a whole plan couldn't
+// start it — the plan sat in the tray until someone opened the UI.
+describe("approve-plan (agent-tools)", () => {
+  const repoFor = async () => {
+    const repo = await makeRepo();
+    return updateProject(createProject({ name: `AP-${Math.random().toString(36).slice(2, 8)}` }).id, {
+      repo_path: repo,
+      branch: "main",
+    })!;
+  };
+
+  it("arms the feature, accepts its suggestions, and cuts the branch", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT = "1";
+    try {
+      const project = await repoFor();
+      const feature = createFeature({ project_id: project.id, name: "Kickoff Me" });
+      createTask({ project_id: project.id, feature_id: feature.id, title: "T1", suggested: true });
+
+      // Resolved by NAME, the way suggest-task's `feature` field already is.
+      const res = await post(approvePlanRoute, "/api/internal/agent-tools/approve-plan", {
+        projectId: project.id,
+        feature: "Kickoff Me",
+      });
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, outcome: "did-work", accepted: 1, total: 1 });
+      expect(getFeature(feature.id)!.autopilot).toBe(1);
+      expect(getFeature(feature.id)!.branch).toBeTruthy();
+      expect(featureMembers(feature.id)[0].suggested).toBe(0);
+    } finally {
+      delete process.env.ORCH_FEATURE_AUTOPILOT;
+    }
+  }, 20_000);
+
+  // A script looping over a filed chain would otherwise arm every feature at
+  // once, cutting each branch from a base without its predecessor's work — the
+  // exact thing the chain exists to prevent.
+  it("leaves a chained feature for its predecessor to start", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT = "1";
+    try {
+      const project = await repoFor();
+      const head = createFeature({ project_id: project.id, name: "First" });
+      const dependent = createFeature({ project_id: project.id, name: "Second" });
+      setFeatureDeps(dependent.id, [head.id]);
+
+      const res = await post(approvePlanRoute, "/api/internal/agent-tools/approve-plan", {
+        projectId: project.id,
+        feature: "Second",
+      });
+      const body = await res.json();
+
+      // 200, not an error: "approve the plan" over a chain is a complete outcome.
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, outcome: "chained" });
+      expect(body.text).toContain("First");
+      expect(getFeature(dependent.id)!.autopilot).toBe(0);
+    } finally {
+      delete process.env.ORCH_FEATURE_AUTOPILOT;
+    }
+  }, 20_000);
+
+  it("404s an unknown feature instead of creating one", async () => {
+    const project = await repoFor();
+    const res = await post(approvePlanRoute, "/api/internal/agent-tools/approve-plan", {
+      projectId: project.id,
+      feature: "Typo McTypoface",
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("surfaces the flag-off refusal verbatim", async () => {
+    delete process.env.ORCH_FEATURE_AUTOPILOT;
+    const project = await repoFor();
+    const feature = createFeature({ project_id: project.id, name: "Flagless" });
+    const res = await post(approvePlanRoute, "/api/internal/agent-tools/approve-plan", {
+      projectId: project.id,
+      feature: feature.id,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("ORCH_FEATURE_AUTOPILOT");
   });
 });
 
