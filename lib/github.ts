@@ -371,6 +371,29 @@ export function buildFeaturePrBody(input: {
 }
 
 /**
+ * What github.com currently thinks of a PR we opened.
+ *
+ * `UNKNOWN` for every reason that isn't an answer — gh missing, logged out,
+ * offline, a deleted PR — because the caller's decision on all of them is
+ * identical: change nothing and ask again next time. Never throws; a poll that
+ * can take down a sweep is worse than no poll.
+ */
+export async function prState(cwd: string, prRef: string): Promise<"OPEN" | "MERGED" | "CLOSED" | "UNKNOWN"> {
+  if (!prRef) return "UNKNOWN";
+  try {
+    const { stdout } = await run("gh", ["pr", "view", prRef, "--json", "state", "--jq", ".state"], {
+      cwd,
+      timeout: 30_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" },
+    });
+    const state = stdout.trim().toUpperCase();
+    return state === "MERGED" || state === "OPEN" || state === "CLOSED" ? state : "UNKNOWN";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+
+/**
  * A task's PR: `createBranchPr` with the task's worktree as the working dir.
  */
 export async function createTaskPr(input: {

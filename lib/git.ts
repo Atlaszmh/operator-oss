@@ -1254,6 +1254,29 @@ export async function hasOrigin(repoPath: string): Promise<boolean> {
 }
 
 /**
+ * Update the remote-tracking refs. The ONLY place this app reads from origin,
+ * and it exists because the app's model of the world is otherwise entirely
+ * local: `main` moves when Operator merges onto it and at no other time, so
+ * work that lands on the remote — a PR merged on github.com, a teammate's
+ * push — is invisible here forever. That is what strands a ship (the push is
+ * rejected as a non-fast-forward against commits this clone has never seen)
+ * and what leaves a merged PR looking eternally open.
+ *
+ * Refs only: it moves no branch and touches no working tree, so it is safe to
+ * run on a repo with a session mid-turn. Merging what it fetched is a separate,
+ * deliberate step.
+ */
+export async function fetchOrigin(repoPath: string): Promise<{ ok: boolean; error?: string; skipped?: boolean }> {
+  if (!(await hasOrigin(repoPath))) return { ok: false, skipped: true, error: "no `origin` remote configured" };
+  try {
+    await git(repoPath, ["fetch", "origin", "--prune"]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: msgOf(e) };
+  }
+}
+
+/**
  * Push `branch` to origin. Best effort BY DESIGN: shipping is a local git
  * operation that has already succeeded by the time this runs, so a push that
  * fails (offline, no remote, credentials expired, non-fast-forward because

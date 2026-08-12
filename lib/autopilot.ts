@@ -43,8 +43,8 @@ import {
 } from "./store";
 import { startInitialTurn, startResumeTurn } from "./runner";
 import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn } from "./gates";
-import { mergeTask, fastForwardWorktree, worktreeSyncStatus } from "./git";
-import { createBranchPr, buildFeaturePrBody } from "./github";
+import { mergeTask, fastForwardWorktree, worktreeSyncStatus, fetchOrigin, landBranch } from "./git";
+import { createBranchPr, buildFeaturePrBody, prState } from "./github";
 import { buildConflictPrompt } from "./agents/shared";
 import { subscribeGlobal, publishGlobal, publish } from "./events";
 import { hasTurn } from "./abort";
@@ -777,9 +777,87 @@ function handOffConflict(
   );
 }
 
+/**
+ * The other end of gate 2: the PR we opened has been merged on github.com, so
+ * the human said yes and the queue may move again.
+ *
+ * Without this the gate is not a gate but a full stop. Autopilot's model of the
+ * world is entirely local — `merged_at` is written when Operator itself merges,
+ * and `reconcileFeatureBranch` compares LOCAL refs — so a PR merged upstream is
+ * invisible here forever, and every feature chained behind it waits on a
+ * `merged_at` that nothing will ever write. Observed: six features and fifteen
+ * tasks queued behind one merged-looking feature, with nothing running and
+ * nothing to say so. (Specified in the original autopilot design — "the sweep's
+ * `gh pr view` poll notices the merge, sets merged_at, and reaps the worktrees"
+ * — and never built.)
+ *
+ * Lives on the autopilot sweep rather than beside the lost-stamp heal in
+ * featureSync BECAUSE of the unattended case: `sweepFeatureHealth` rides the
+ * recap cadence, which the CLIENT drives, so with no browser open it never
+ * runs. This path is the server.js heartbeat, which needs nobody watching.
+ */
+async function landMergedPr(project: Project, feature: Feature): Promise<void> {
+  if (feature.merged_at || !feature.pr_url || !project.repo_path) return;
+
+  const state = await prState(project.repo_path, feature.pr_url);
+  // OPEN is the normal answer and says itself on the tile; UNKNOWN means the
+  // question couldn't be asked (no gh, logged out, offline) and is not news.
+  // Neither is worth a line every 60 seconds — only the transition is.
+  if (state !== "MERGED") return;
+
+  trace("autopilot", `PR-MERGED feature="${feature.name}" ${feature.pr_url} — catching ${project.branch} up to origin`);
+
+  // The merge happened on the remote, so the local base has to be brought to it
+  // before anything else is true: a dependent cut now would fork a base without
+  // the work it was chained behind, and the ship stamp would be a lie about a
+  // branch this clone can't see. An ordinary merge, not a fast-forward — this
+  // clone usually has local landings origin hasn't got.
+  const fetched = await fetchOrigin(project.repo_path);
+  if (!fetched.ok) {
+    parkFeature(feature, `Could not reach origin to confirm the merged PR: ${fetched.error}. Retrying.`);
+    return;
+  }
+  const pulled = await landBranch({
+    repoPath: project.repo_path,
+    workBranch: `origin/${project.branch}`,
+    baseBranch: project.branch,
+    message: `Merge origin/${project.branch} into ${project.branch} (${feature.name}'s PR merged upstream)`,
+  });
+  if (!pulled.ok) {
+    parkFeature(
+      feature,
+      pulled.conflicts?.length
+        ? `${feature.name}'s PR was merged on GitHub, but catching ${project.branch} up to origin conflicts in ${pulled.conflicts.length} file(s) — reconcile it in your own checkout, and the queue resumes on its own.`
+        : `${feature.name}'s PR was merged on GitHub, but catching ${project.branch} up to origin failed: ${pulled.error ?? "unknown error"}`
+    );
+    return;
+  }
+
+  // ponytail: assumes a merge-commit merge, which is what Operator's own PRs
+  // get. A squash or rebase merge lands the same TREE under different shas, so
+  // the stamp is still right (the work is on the base) but reconcile may later
+  // count the originals as "commits that landed after it shipped". Compare
+  // trees instead of ancestry if that ever becomes a real complaint.
+  updateFeature(feature.id, { merged_at: Date.now(), archived: 1, sync_conflict: "" });
+  trace("autopilot", `SHIPPED feature="${feature.name}" via merged PR — ${project.branch} now carries it`);
+
+  // Exactly what the ship route does after it lands, and for the same reasons:
+  // every other live branch is now behind by this feature, and a dependent that
+  // was waiting on it can start from a base that finally contains it.
+  await syncFeaturesToBase(project, { except: feature.id });
+  // Dynamic import for the same reason reconcileFeatureBranch uses one: a
+  // static approvePlan edge closes a cycle back through this module.
+  const { kickoffDependents } = await import("./approvePlan");
+  for (const k of await kickoffDependents(feature.id))
+    trace("autopilot", k.ok ? `CHAIN-START feature="${k.name}"` : `CHAIN-FAILED feature="${k.name}": ${k.error}`);
+}
+
 /** Every member landed → push the integration branch and open the PR (gate 2). */
 async function maybeOpenPr(project: Project, feature: Feature): Promise<void> {
-  if (!feature.branch || feature.pr_url) return;
+  if (!feature.branch) return;
+  // A feature with a PR is past this gate's opening half — the only question
+  // left is whether it has been merged.
+  if (feature.pr_url) return landMergedPr(project, feature);
   const members = featureMembers(feature.id);
   if (!members.length) return;
   const outstanding = members.filter(
@@ -871,6 +949,21 @@ async function sendTurn(project: Project, task: Task, text: string): Promise<voi
 function noteOnce(task: Task, text: string): void {
   if (listMessages(task.id).some((m) => m.role === "system" && m.content === text)) return;
   note(task, text);
+}
+
+/**
+ * Say something about the FEATURE rather than about a member task.
+ *
+ * `features.sync_conflict` is the existing tile-level notice — rendered on the
+ * feature, cleared by reconcileFeatureBranch once it stops being true — and a
+ * problem with the base branch belongs to the feature, not to whichever member
+ * happened to finish last. Idempotent for the same reason block() is: this runs
+ * on every sweep until the condition clears.
+ */
+function parkFeature(feature: Feature, note: string): void {
+  if (getFeature(feature.id)?.sync_conflict === note) return;
+  updateFeature(feature.id, { sync_conflict: note });
+  traceWarn("autopilot", `FEATURE-PARKED "${feature.name}": ${note}`);
 }
 
 /** A quiet system line in the transcript: what autopilot did, in the user's view. */

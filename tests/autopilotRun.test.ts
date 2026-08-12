@@ -38,10 +38,14 @@ vi.mock("@/lib/gates", () => ({
 
 // `gh` isn't reachable from the suite, and the PR is the one step that genuinely
 // leaves the machine. buildFeaturePrBody stays real (it has its own test).
-const { prMock } = vi.hoisted(() => ({ prMock: vi.fn() }));
+const { prMock, prStateMock } = vi.hoisted(() => ({ prMock: vi.fn(), prStateMock: vi.fn() }));
 vi.mock("@/lib/github", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/github")>()),
   createBranchPr: (...a: unknown[]) => prMock(...a),
+  // github.com's opinion of a PR is the one fact the suite cannot produce
+  // locally. Everything downstream of it — the fetch, the merge, the stamp, the
+  // chain — runs for real against a real origin.
+  prState: (...a: unknown[]) => prStateMock(...a),
 }));
 
 import fs from "node:fs";
@@ -52,7 +56,7 @@ import { startInitialTurn } from "@/lib/runner";
 import { getDb } from "@/lib/db";
 import { createFeatureBranch } from "@/lib/git";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "@/lib/config";
-import { makeRepo } from "./helpers";
+import { makeRepo, tmpDir, git as gitCmd } from "./helpers";
 import {
   createProject,
   createFeature,
@@ -62,6 +66,7 @@ import {
   getFeature,
   getTask,
   setTaskDeps,
+  setFeatureDeps,
   updateTask,
   setSetting,
   featureMembers,
@@ -80,6 +85,10 @@ beforeEach(() => {
   testsMock.mockResolvedValue({ ran: true, ok: true, output: "" });
   prMock.mockReset();
   prMock.mockResolvedValue({ ok: true, url: "https://example/pull/7" });
+  prStateMock.mockReset();
+  // Default: nothing has been merged upstream, so the poll is a no-op for every
+  // test that isn't about it.
+  prStateMock.mockResolvedValue("OPEN");
   setSetting("rate_limit_info", "{}");
   runTurnMock.mockReset();
   // Default scripted turn: write a file into the worktree so there is something
@@ -333,7 +342,80 @@ describe("autopilot scheduler", () => {
     expect(blocked[0].blocked_reason).toContain("determinism BROKEN");
   }, 40_000);
 
-  // A finished feature is finished. Nine of them landed every task, got merged
+  // Gate 2's other end. Without this the gate is a full stop: merged_at is only
+// written when Operator itself merges, so a PR merged on github.com is
+// invisible here and everything chained behind it waits forever.
+describe("a PR merged upstream resumes the chain", () => {
+  /** A project whose repo has a real `origin` holding the merged result. */
+  async function shippedUpstream() {
+    const { repo, project, feature, tasks } = await planFixture(1);
+    // Land the member so the feature is at the PR gate, exactly as a real run
+    // leaves it, then record the PR the way maybeOpenPr would have.
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 15_000 });
+    updateFeature(feature.id, { pr_url: "https://github.com/x/y/pull/9" });
+
+    // A bare origin that already contains the feature branch merged into main —
+    // i.e. what the repo looks like the instant someone clicks Merge on GitHub.
+    const origin = tmpDir("origin-");
+    await gitCmd(origin, "init", "--bare", "-b", "main");
+    await gitCmd(repo, "remote", "add", "origin", origin);
+    const upstream = tmpDir("upstream-");
+    await gitCmd(upstream, "clone", repo, ".");
+    // In the clone the feature branch exists only as a remote-tracking ref.
+    await gitCmd(upstream, "merge", "--no-ff", "-m", "Merge PR #9", `origin/${feature.branch}`);
+    await gitCmd(upstream, "remote", "add", "up", origin);
+    await gitCmd(upstream, "push", "up", "main");
+    return { repo, project, feature };
+  }
+
+  it("catches the base up to origin, stamps the ship, and starts the dependent", async () => {
+    const { repo, project, feature } = await shippedUpstream();
+    const dependent = createFeature({ project_id: project.id, name: "Waits for it" });
+    createTask({ project_id: project.id, feature_id: dependent.id, title: "Later work", suggested: true });
+    setFeatureDeps(dependent.id, [feature.id]);
+    prStateMock.mockResolvedValue("MERGED");
+
+    await sweep(project.id);
+
+    // The ship is recorded, and the base really did move — not just the row.
+    await vi.waitFor(() => expect(getFeature(feature.id)!.merged_at).toBeGreaterThan(0), { timeout: 15_000 });
+    expect(getFeature(feature.id)!.archived).toBe(1);
+    const log = execFileSync("git", ["-C", repo, "log", "--oneline", "main"], { encoding: "utf8" });
+    expect(log).toContain("Merge PR #9");
+
+    // …and the queue moved on by itself: the dependent is armed, its branch cut
+    // from a base that now contains its predecessor.
+    const armed = getFeature(dependent.id)!;
+    expect(armed.autopilot).toBe(1);
+    expect(armed.branch).toBeTruthy();
+    expect(featureMembers(dependent.id)[0].suggested).toBe(0);
+  }, 40_000);
+
+  it("leaves everything alone while the PR is still open", async () => {
+    const { project, feature } = await shippedUpstream();
+    prStateMock.mockResolvedValue("OPEN");
+
+    await sweep(project.id);
+
+    expect(getFeature(feature.id)!.merged_at).toBe(0);
+    expect(getFeature(feature.id)!.archived).toBe(0);
+  }, 40_000);
+
+  // gh missing, logged out, offline: the question couldn't be asked, which is
+  // not the same as "not merged" and must never be acted on.
+  it("changes nothing when the PR state can't be read", async () => {
+    const { project, feature } = await shippedUpstream();
+    prStateMock.mockResolvedValue("UNKNOWN");
+
+    await sweep(project.id);
+
+    expect(getFeature(feature.id)!.merged_at).toBe(0);
+  }, 40_000);
+});
+
+// A finished feature is finished. Nine of them landed every task, got merged
   // into main by a hand-clicked Ship that beat this step, and were then flagged
   // "needs you" because gh — correctly — refused to open a PR for a branch main
   // already contained. The PR is an artifact of the ship, not a gate on it.

@@ -115,6 +115,8 @@ The queue never idles behind its own bookkeeping: a task whose dependencies have
 
 **You merge the PR.** When the last task lands, the integration branch is pushed and a PR opened against your project branch, its body assembled from the approved spec and every task's outcome line. Review it on GitHub, where CI and your review tools already live.
 
+**Merging that PR is what restarts the queue.** Autopilot keeps watching a feature whose PR is open: when GitHub says it merged, it fetches origin, brings your project branch up to date, marks the feature shipped, and starts whatever was chained behind it — no second click in Operator, and no browser tab needed for any of it. Your approval is the merge you were already going to do. If catching the branch up to origin conflicts, the feature says so on its tile and the queue resumes by itself once you've reconciled it.
+
 The PR is the artifact, never the gate. If you ship the feature yourself first — the Ship button merges the integration branch locally, and it can beat autopilot's last member out of the gate — there is nothing left to open a PR for, and that is treated as the finish line rather than a failure. Same when a PR simply can't be opened (no `gh`, a dead login): the feature is still finished, its work is still on the integration branch, and it says so in the task's transcript instead of appearing in "N need you". Open one later from the feature's **Open PR** button if you want it.
 
 **When it gets stuck**, the task shows up in the "N need you" pill you already watch, with the reason in full on the feature page. Reply to it — answering clears the block and it picks the task back up. A stuck task never stalls its siblings; only work that depended on it waits.
