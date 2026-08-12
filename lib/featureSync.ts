@@ -1,9 +1,10 @@
-import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount, pushBranch } from "./git";
+import { landBranch, worktreeSyncStatus, fastForwardWorktree, prepareWorktreeMerge, branchTip, unlandedWorkCount, pushBranch, mergeFeature } from "./git";
 import { listFeatures, listTasks, listProjects, createTask, getFeature, updateFeature, updateTask, taskBaseBranch } from "./store";
 import { buildFeatureConflictTaskPrompt, buildTaskLandConflictPrompt } from "./agents/shared";
+import { runFeatureGate, featureGateFailure } from "./gates";
 import { resolveFeatures } from "./features";
 import { hasTurn } from "./abort";
-import type { FeatureWithCounts, Project, Task } from "./types";
+import type { Feature, FeatureWithCounts, Project, Task } from "./types";
 
 /**
  * Catch every live feature branch up with the project branch, the moment
@@ -456,6 +457,117 @@ export async function sweepFeatureHealth(): Promise<void> {
       await reconcileFeatureBranch(p, f);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shipping a feature — the one implementation.
+// ---------------------------------------------------------------------------
+
+/** Announce a step, run it, announce how long it took. The ship route wraps this
+ *  to stream NDJSON; every other caller just runs the work. */
+export type ShipStepRunner = <T>(key: string, label: string, fn: () => Promise<T>) => Promise<T>;
+const runDirect: ShipStepRunner = (_key, _label, fn) => fn();
+
+export interface ShipFeatureResult {
+  ok: boolean;
+  error?: string;
+  conflicts?: string[];
+  /** The gate refused — distinguished so the caller can say WHY it refused. */
+  gateFailed?: boolean;
+  gateInconclusive?: boolean;
+  alreadyMerged?: boolean;
+  targetBranch?: string;
+  synced: FeatureSyncResult[];
+  chained: { featureId: string; name: string; ok: boolean; error?: string }[];
+  pushed: boolean;
+  pushNote: string;
+}
+
+/**
+ * Land a feature on the project branch as one unit: gate the assembled branch,
+ * merge it, catch every other live branch up, kick off whatever was chained
+ * behind it, and publish.
+ *
+ * EXTRACTED because there are now two callers and there must not be two
+ * implementations — the same argument that put approvePlan() in its own module
+ * for feature chaining. `POST /api/features/[id]/ship` is the button; autopilot
+ * calls this directly when ORCH_FEATURE_AUTOPILOT_SHIP lets it finish a plan
+ * without stopping. A second copy in the scheduler would drift from the one the
+ * button uses, and the divergence would show up as "shipping by hand does
+ * something subtly different", which is the worst kind of bug to chase.
+ *
+ * The gate is INSIDE, not the caller's job: nothing should ever merge a red
+ * integration branch, whoever asked. Re-running it costs nothing when the
+ * caller already gated (runTestsIn memoises on the tree sha, and the tree can't
+ * have moved — this is the same branch, moments later).
+ */
+export async function shipFeature(
+  project: Project,
+  feature: Feature,
+  opts: { force?: boolean; step?: ShipStepRunner } = {}
+): Promise<ShipFeatureResult> {
+  const step = opts.step ?? runDirect;
+  const empty = { synced: [], chained: [], pushed: false, pushNote: "" };
+
+  // Prove the ASSEMBLED branch runs before it touches the project branch. Every
+  // member passed its own gate in its own worktree, which says nothing about the
+  // branch they were all merged into. `force` is the deliberate override for a
+  // user who has looked and disagrees — never available to autopilot.
+  if (!opts.force) {
+    const gate = await step("gate", `Checking ${feature.branch} runs${project.test_command ? ` (${project.test_command})` : ""}`, () =>
+      runFeatureGate(project, feature)
+    );
+    if (!gate.ok)
+      return { ...empty, ok: false, gateFailed: true, gateInconclusive: !!gate.inconclusive, error: featureGateFailure(feature, project, gate) };
+  }
+
+  const res = await step("merge", `Merging into ${project.branch}`, () =>
+    mergeFeature({
+      repoPath: project.repo_path,
+      featureBranch: feature.branch,
+      baseBranch: project.branch,
+      message: `Merge feature ${feature.name} (${feature.branch}) into ${project.branch}`,
+    })
+  );
+  if (!res.ok) return { ...empty, ok: false, error: res.error, conflicts: res.conflicts ?? [] };
+
+  // Only stamp merged_at when commits actually landed — a re-ship of an
+  // already-merged branch shouldn't reset the date it originally shipped, and
+  // must not un-do a deliberate Restore.
+  if (!res.alreadyMerged) updateFeature(feature.id, { merged_at: Date.now(), archived: 1 });
+
+  // The project branch just moved, so every other live feature is now behind by
+  // exactly this feature. Catch them up HERE, while the conflict (if any) is one
+  // feature wide and the sessions that caused it are still warm.
+  const synced = res.alreadyMerged
+    ? []
+    : await step("sync", "Catching up the other feature branches", () => syncFeaturesToBase(project, { except: feature.id }));
+
+  // This landing may be what a dependent was waiting for. Cut its branch NOW,
+  // from a base that already contains this feature's work, and arm it.
+  let chained: { featureId: string; name: string; ok: boolean; error?: string }[] = [];
+  if (!res.alreadyMerged) {
+    const { kickoffDependents } = await import("./approvePlan");
+    chained = await kickoffDependents(feature.id);
+  }
+
+  // Publish what landed, when the instance is configured to. After the local
+  // catch-ups: a push that hangs must not delay reconciling the branches this
+  // merge just moved underneath.
+  const published =
+    res.alreadyMerged || !resolveFeatures().pushOnShip
+      ? { pushed: false, note: "" }
+      : await step("push", `Pushing ${project.branch} to origin`, () => publishProjectBranch(project));
+
+  return {
+    ok: true,
+    alreadyMerged: !!res.alreadyMerged,
+    targetBranch: res.targetBranch,
+    synced,
+    chained,
+    pushed: published.pushed,
+    pushNote: published.note,
+  };
 }
 
 // ---------------------------------------------------------------------------

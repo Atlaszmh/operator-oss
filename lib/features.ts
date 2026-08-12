@@ -41,6 +41,19 @@ export interface Features {
    *  asked is a tool you have to remember to distrust. ORCH_FEATURE_PUSH_ON_SHIP=1
    *  for a fork you push to directly (no PR review step in between). */
   pushOnShip: boolean;
+  /** Autopilot finishes the plan: when a feature's branch is green and its PR is
+   *  open, it ships the feature itself (merge into the project branch, catch the
+   *  other branches up, start whatever was chained behind it) instead of stopping
+   *  for a human to merge the PR.
+   *
+   *  OFF by default, and deliberately a separate switch from `autopilot`: this is
+   *  the one that removes the second human gate. With it off, an approved plan
+   *  builds one feature and waits — which is right when you want to read each PR,
+   *  and wrong when you approved a seven-feature plan and meant it. The PR is
+   *  still opened first, so the artifact and its review record survive; GitHub
+   *  closes it as merged when the same commits reach the base.
+   *  ORCH_FEATURE_AUTOPILOT_SHIP=1. */
+  autopilotShip: boolean;
 }
 
 export const DEFAULT_FEATURES: Features = {
@@ -50,6 +63,7 @@ export const DEFAULT_FEATURES: Features = {
   autopilot: false,
   autopilotShadow: true,
   pushOnShip: false,
+  autopilotShip: false,
 };
 
 const truthy = (v: string | undefined) => v === "1" || v === "true" || v === "on";
@@ -67,6 +81,7 @@ export function resolveFeatures(): Features {
     autopilot: flag(process.env.ORCH_FEATURE_AUTOPILOT, DEFAULT_FEATURES.autopilot),
     autopilotShadow: flag(process.env.ORCH_FEATURE_AUTOPILOT_SHADOW, DEFAULT_FEATURES.autopilotShadow),
     pushOnShip: flag(process.env.ORCH_FEATURE_PUSH_ON_SHIP, DEFAULT_FEATURES.pushOnShip),
+    autopilotShip: flag(process.env.ORCH_FEATURE_AUTOPILOT_SHIP, DEFAULT_FEATURES.autopilotShip),
   };
 }
 

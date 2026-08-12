@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
-import { getFeature, getProject, updateFeature, featureUnfinishedTasks } from "@/lib/store";
-import { mergeFeature } from "@/lib/git";
-import { syncFeaturesToBase, summarizeSync, publishProjectBranch } from "@/lib/featureSync";
-import { runFeatureGate, featureGateFailure } from "@/lib/gates";
-import { resolveFeatures } from "@/lib/features";
-import { kickoffDependents, type KickoffResult } from "@/lib/approvePlan";
+import { getFeature, getProject, featureUnfinishedTasks } from "@/lib/store";
+import { shipFeature, summarizeSync } from "@/lib/featureSync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 900;
@@ -56,36 +52,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       };
 
       try {
-        // Prove the ASSEMBLED branch runs before it touches the project branch.
-        // Until this existed the only check here was git's, which reports
-        // overlapping edits and nothing else — so a feature whose members were
-        // each individually green could merge cleanly and still be broken.
-        // `?force=1` is the deliberate override for a user who has looked and
-        // disagrees.
-        if (!force) {
-          const gate = await step("gate", `Checking ${feature.branch} runs${project.test_command ? ` (${project.test_command})` : ""}`, () =>
-            runFeatureGate(project, feature)
-          );
-          if (!gate.ok) {
-            send({
-              type: "result",
-              error: featureGateFailure(feature, project, gate),
-              gateFailed: true,
-              inconclusive: !!gate.inconclusive,
-            });
-            return;
-          }
-        }
-
+        // Every step of the landing lives in shipFeature() — autopilot runs the
+        // identical sequence when it finishes a plan unattended, and two copies
+        // would drift. This route owns only what is HTTP: the progress stream,
+        // and the sentences a human reads at the end.
         const unfinished = featureUnfinishedTasks(feature.id);
-        const res = await step("merge", `Merging into ${project.branch}`, () =>
-          mergeFeature({
-            repoPath: project.repo_path,
-            featureBranch: feature.branch,
-            baseBranch: project.branch,
-            message: `Merge feature ${feature.name} (${feature.branch}) into ${project.branch}`,
-          })
-        );
+        const res = await shipFeature(project, feature, { force, step });
 
         if (!res.ok) {
           send({
@@ -94,57 +66,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
               ? `${feature.branch} conflicts with ${project.branch} in ${res.conflicts.length} file(s). Sync the feature first, or resolve them in your own checkout.`
               : res.error,
             conflicts: res.conflicts ?? [],
+            ...(res.gateFailed ? { gateFailed: true, inconclusive: !!res.gateInconclusive } : {}),
           });
           return;
         }
 
-        // Only stamp merged_at when commits actually landed — a re-ship of an
-        // already-merged branch shouldn't reset the date it originally shipped.
-        //
-        // Shipping is also the moment the feature leaves the working set, so it
-        // archives itself in the same write: the Archived section is where it
-        // stays reachable (and restorable) instead of sitting at the top of the
-        // task list forever. Guarded by alreadyMerged for the same reason
-        // merged_at is — re-shipping must not un-do a deliberate Restore.
-        if (!res.alreadyMerged) updateFeature(feature.id, { merged_at: Date.now(), archived: 1 });
-
-        // The project branch just moved, so every other live feature is now
-        // behind by exactly this feature. Catch them up HERE, at the landing,
-        // while the conflict (if any) is one feature wide and the sessions that
-        // caused it are still warm. Left until each feature's own ship, this is
-        // the divergence that turns a one-line reconciliation into a multi-week
-        // merge. Never fails the ship: the merge already succeeded, and another
-        // feature's branch is not this one's problem to report as an error.
-        const synced = res.alreadyMerged
-          ? []
-          : await step("sync", "Catching up the other feature branches", () =>
-              syncFeaturesToBase(project, { except: feature.id })
-            );
+        const { synced, chained, published } = { synced: res.synced, chained: res.chained, published: { pushed: res.pushed, note: res.pushNote } };
         const syncNote = summarizeSync(synced);
-
-        // Feature chaining: this landing may be what a dependent was waiting
-        // for. Cut its branch NOW — from a base that already contains this
-        // feature's work — and arm it. One announced line per kicked-off
-        // dependent so the chain is visible in the ship log; a failure is that
-        // dependent's problem, never the ship's.
-        let chained: KickoffResult[] = [];
-        if (!res.alreadyMerged) {
-          chained = await kickoffDependents(feature.id);
-          for (const k of chained) {
-            send({ type: "step", key: `chain-${k.featureId}`, label: k.ok ? `Kicked off ${k.name}` : `Couldn't kick off ${k.name}: ${k.error}` });
-            send({ type: "step_done", key: `chain-${k.featureId}`, ms: 0 });
-          }
+        // One announced line per kicked-off dependent, so the chain is visible
+        // in the ship log rather than only in the final sentence.
+        for (const k of chained) {
+          send({ type: "step", key: `chain-${k.featureId}`, label: k.ok ? `Kicked off ${k.name}` : `Couldn't kick off ${k.name}: ${k.error}` });
+          send({ type: "step_done", key: `chain-${k.featureId}`, ms: 0 });
         }
-
-        // Publish what landed, when the instance is configured to (off by
-        // default). After the local catch-ups: a push that hangs must not delay
-        // reconciling the branches this merge just moved underneath. The step is
-        // only announced when pushing is actually on — a tick against work that
-        // never ran is worse than no line at all.
-        const published =
-          res.alreadyMerged || !resolveFeatures().pushOnShip
-            ? { pushed: false, note: "" }
-            : await step("push", `Pushing ${project.branch} to origin`, () => publishProjectBranch(project));
 
         const tail = unfinished.length
           ? ` ${unfinished.length} task${unfinished.length === 1 ? " is" : "s are"} still unfinished, so only work already merged into ${feature.branch} landed.`

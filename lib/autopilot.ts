@@ -23,6 +23,7 @@ import {
   publishProjectBranch,
   fileLandResolutionTask,
   isResolutionTask,
+  shipFeature,
 } from "./featureSync";
 import {
   getProject,
@@ -778,6 +779,65 @@ function handOffConflict(
 }
 
 /**
+ * Finish the plan: ship the feature and start whatever was chained behind it,
+ * with nobody in the loop.
+ *
+ * WHY THIS IS A SEPARATE FLAG FROM AUTOPILOT ITSELF. Approving a plan says "run
+ * this"; it does not by itself say "and land every feature in it on my project
+ * branch without showing me". With ORCH_FEATURE_AUTOPILOT_SHIP off, an approved
+ * plan builds ONE feature and stops at its PR — right when you intend to read
+ * each one. Turning it on is the statement that the plan itself was the
+ * decision: a seven-feature chain then runs to the end, because there is no
+ * question left for a human to answer between one feature landing and the next
+ * one starting, and stopping to ask is just latency wearing a safety costume.
+ *
+ * Ordering matters and is deliberate: the PR is opened FIRST and shipped
+ * second. Ship first and `createBranchPr` would correctly find nothing to open
+ * (the base already contains the branch) and the artifact would never exist.
+ * This way the PR is created, then the same commits reach the base and GitHub
+ * closes it as merged — which is exactly what every hand-shipped feature on
+ * this project already looked like.
+ *
+ * Everything it does routes through shipFeature(), the same call the Ship
+ * button makes, gate included: nothing merges a red integration branch, whoever
+ * asked. `force` is never passed — that override belongs to a human who has
+ * looked at a failure and disagreed.
+ */
+async function maybeAutoShip(project: Project, featureId: string): Promise<void> {
+  if (!resolveFeatures().autopilotShip) return;
+  // Re-read: opening the PR took a network round trip, and this decides a merge.
+  const feature = getFeature(featureId);
+  if (!feature || feature.merged_at || !feature.branch) return;
+
+  const t0 = Date.now();
+  const res = await shipFeature(project, feature);
+  if (!res.ok) {
+    // The work is safe on the integration branch; what failed is the landing.
+    // On the FEATURE, not a member task — and never as "needs you" on work that
+    // succeeded (see the PR-failure rule above).
+    parkFeature(
+      feature,
+      res.conflicts?.length
+        ? `Autopilot could not ship this: ${feature.branch} conflicts with ${project.branch} in ${res.conflicts.length} file(s). Sync the feature, or land it by hand — the work itself is fine.`
+        : `Autopilot could not ship this: ${res.error ?? "unknown error"}`
+    );
+    return;
+  }
+
+  trace(
+    "autopilot",
+    `SHIPPED feature="${feature.name}" into ${res.targetBranch ?? project.branch} in ${secs(t0)}` +
+      `${res.pushed ? " (pushed)" : ""}${res.alreadyMerged ? " (already merged)" : ""}`
+  );
+  // A push that failed is not a failed ship — the merge is committed locally and
+  // the next successful push carries it — but unattended, nobody reads a return
+  // value, so it goes on the tile.
+  if (res.pushNote && !res.pushed) parkFeature(feature, res.pushNote);
+  for (const k of res.chained)
+    trace("autopilot", k.ok ? `CHAIN-START feature="${k.name}"` : `CHAIN-FAILED feature="${k.name}": ${k.error}`);
+}
+
+/**
  * The other end of gate 2: the PR we opened has been merged on github.com, so
  * the human said yes and the queue may move again.
  *
@@ -855,9 +915,16 @@ async function landMergedPr(project: Project, feature: Feature): Promise<void> {
 /** Every member landed → push the integration branch and open the PR (gate 2). */
 async function maybeOpenPr(project: Project, feature: Feature): Promise<void> {
   if (!feature.branch) return;
-  // A feature with a PR is past this gate's opening half — the only question
-  // left is whether it has been merged.
-  if (feature.pr_url) return landMergedPr(project, feature);
+  // A feature with a PR is past this gate's opening half. Two ways it can move:
+  // somebody merged the PR upstream, or this instance finishes plans itself.
+  // Both re-read the row and no-op when they don't apply, so running both is
+  // safe — and it means a feature already parked at its PR when the flag was
+  // turned on gets picked up on the next sweep rather than waiting forever.
+  if (feature.pr_url) {
+    await landMergedPr(project, feature);
+    await maybeAutoShip(project, feature.id);
+    return;
+  }
   const members = featureMembers(feature.id);
   if (!members.length) return;
   const outstanding = members.filter(
@@ -893,6 +960,9 @@ async function maybeOpenPr(project: Project, feature: Feature): Promise<void> {
 
   if (res.ok && res.url) {
     updateFeature(feature.id, { pr_url: res.url });
+    // The PR is open; on an instance that lets autopilot finish, that is the
+    // artifact rather than the stopping point.
+    await maybeAutoShip(project, feature.id);
     return;
   }
 

@@ -342,7 +342,83 @@ describe("autopilot scheduler", () => {
     expect(blocked[0].blocked_reason).toContain("determinism BROKEN");
   }, 40_000);
 
-  // Gate 2's other end. Without this the gate is a full stop: merged_at is only
+  // Finishing the plan. Approving a seven-feature chain and then being asked to
+// click Merge between every pair of features is latency, not safety — there is
+// no question for a human between one feature landing and the next starting.
+describe("autopilot finishes the plan when ORCH_FEATURE_AUTOPILOT_SHIP is on", () => {
+  afterEach(() => { delete process.env.ORCH_FEATURE_AUTOPILOT_SHIP; });
+
+  it("stops at the PR when the flag is off", async () => {
+    const { project, feature } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getFeature(feature.id)!.pr_url).toBeTruthy(), { timeout: 20_000 });
+    // The default is unchanged: an approved plan builds one feature and waits.
+    expect(getFeature(feature.id)!.merged_at).toBe(0);
+    expect(getFeature(feature.id)!.archived).toBe(0);
+  }, 40_000);
+
+  it("opens the PR AND ships it, in that order, and starts what was chained behind it", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT_SHIP = "1";
+    const { repo, project, feature } = await planFixture(1);
+    const next = createFeature({ project_id: project.id, name: "Next in the plan" });
+    createTask({ project_id: project.id, feature_id: next.id, title: "Later work", suggested: true });
+    setFeatureDeps(next.id, [feature.id]);
+
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getFeature(feature.id)!.merged_at).toBeGreaterThan(0), { timeout: 20_000 });
+    const shipped = getFeature(feature.id)!;
+    // The PR still exists: it is the artifact, and opening it BEFORE the merge
+    // is the only order in which it can exist at all — ship first and
+    // createBranchPr correctly finds nothing to open.
+    expect(shipped.pr_url).toBe("https://example/pull/7");
+    expect(shipped.archived).toBe(1);
+    // Exactly one PR for THIS feature — no duplicate on a later sweep. (Counted
+    // per branch: the chain runs on, and the next feature opens its own.)
+    expect(prMock.mock.calls.filter((c) => (c[0] as { branch: string }).branch === feature.branch)).toHaveLength(1);
+    // The work really is on the project branch, not just flagged as shipped.
+    const log = execFileSync("git", ["-C", repo, "log", "--oneline", "main"], { encoding: "utf8" });
+    expect(log).toContain(feature.branch);
+
+    // …and the plan moved on by itself: the dependent armed, cut its branch from
+    // a base containing its predecessor, ran, and shipped — the whole point.
+    await vi.waitFor(() => expect(getFeature(next.id)!.merged_at).toBeGreaterThan(0), { timeout: 20_000 });
+    expect(featureMembers(next.id)[0].suggested).toBe(0);
+    expect(getFeature(next.id)!.branch).toBeTruthy();
+  }, 60_000);
+
+  it("never ships a feature whose assembled branch is red", async () => {
+    process.env.ORCH_FEATURE_AUTOPILOT_SHIP = "1";
+    const { project, feature } = await planFixture(1);
+    featureGateMock.mockResolvedValue({ ok: false, ran: true, output: "determinism BROKEN" });
+    ensureAutopilot();
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(featureGateMock).toHaveBeenCalled(), { timeout: 20_000 });
+    expect(getFeature(feature.id)!.merged_at).toBe(0);
+    expect(prMock).not.toHaveBeenCalled();
+  }, 40_000);
+
+  // The flag can be turned on while a feature is already sitting at its PR —
+  // which is exactly how it gets turned on. That feature must not need a nudge.
+  it("picks up a feature already parked at its PR", async () => {
+    const { project, feature, tasks } = await planFixture(1);
+    ensureAutopilot();
+    await sweep(project.id);
+    await vi.waitFor(() => expect(getTask(tasks[0].id)!.status).toBe("done"), { timeout: 20_000 });
+    expect(getFeature(feature.id)!.merged_at).toBe(0); // parked at the PR
+
+    process.env.ORCH_FEATURE_AUTOPILOT_SHIP = "1";
+    await sweep(project.id);
+
+    await vi.waitFor(() => expect(getFeature(feature.id)!.merged_at).toBeGreaterThan(0), { timeout: 20_000 });
+  }, 60_000);
+});
+
+// Gate 2's other end. Without this the gate is a full stop: merged_at is only
 // written when Operator itself merges, so a PR merged on github.com is
 // invisible here and everything chained behind it waits forever.
 describe("a PR merged upstream resumes the chain", () => {

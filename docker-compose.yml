@@ -72,6 +72,10 @@ services:
       ORCH_FEATURE_AUTOPILOT: ${ORCH_FEATURE_AUTOPILOT:-}
       ORCH_FEATURE_AUTOPILOT_SHADOW: ${ORCH_FEATURE_AUTOPILOT_SHADOW:-}
       ORCH_FEATURE_PUSH_ON_SHIP: ${ORCH_FEATURE_PUSH_ON_SHIP:-}
+      # Autopilot ships each green feature itself and starts the next one in the
+      # chain, instead of stopping at its PR. Empty = off (the second human gate
+      # stays); =1 runs an approved plan end to end.
+      ORCH_FEATURE_AUTOPILOT_SHIP: ${ORCH_FEATURE_AUTOPILOT_SHIP:-}
       # Autopilot tuning (lib/config.ts); empty = the documented defaults
       # (2 concurrent tasks, 2 gate attempts, 10-minute test timeout).
       ORCH_AUTOPILOT_CONCURRENCY: ${ORCH_AUTOPILOT_CONCURRENCY:-}
