@@ -125,6 +125,8 @@ declare global {
         again: Set<string>;
         usageNotedUntil: number;
         waiters: Map<string, (() => void)[]>;
+        /** Per project, when the in-flight line was last emitted — see reportInFlight. */
+        lastInFlight: Map<string, number>;
       }
     | undefined;
 }
@@ -138,6 +140,7 @@ function state() {
       again: new Set(),
       usageNotedUntil: 0,
       waiters: new Map(),
+      lastInFlight: new Map(),
     };
   return global.__orchAutopilot;
 }
@@ -254,6 +257,12 @@ export async function sweep(projectId: string): Promise<void> {
     // once per in-flight sweep rather than for every event that lands.
     if (!st.again.has(projectId) && hasArmedFeature(projectId))
       trace("autopilot", `DEFERRED project=${projectId} — a sweep is already running; it will re-loop`);
+    // …and then keep saying what that pass is DOING. This is the silence the
+    // user kept reading as a hang: STATE only prints when a pass ends, and a
+    // pass sitting in a 6-minute review or a feature gate prints nothing at all
+    // for as long as it takes. Asked three times in one day whether a working
+    // queue was stuck, which is the answer that a log has to be able to give.
+    reportInFlight(projectId);
     st.again.add(projectId);
     // …and tell that pass now, so a member that just handed back is gated
     // immediately rather than when some other member's review happens to end.
@@ -404,6 +413,66 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
   //    is the line that does, and when nothing can move it names every
   //    outstanding member and what it is waiting for.
   reportDisposition(feature);
+}
+
+/**
+ * What the IN-FLIGHT pass is doing, while it is doing it.
+ *
+ * Every other line in this timeline is emitted when something HAPPENS. That is
+ * exactly wrong for the case a user actually worries about — a pass that is
+ * working correctly and slowly (a 6-minute review, a feature gate running the
+ * whole suite, a ship) — because the correct behaviour and a hang produce the
+ * identical output: nothing. Derived entirely from rows and the live turn set,
+ * so it needs no bookkeeping to go stale.
+ *
+ * Rate-limited to roughly the heartbeat, not per call: event-driven sweeps can
+ * arrive in bursts, and the point is a steady "still working, here's what on",
+ * not one line per event.
+ */
+const IN_FLIGHT_LOG_MS = 45_000;
+
+function reportInFlight(projectId: string): void {
+  const st = state();
+  if (Date.now() - (st.lastInFlight.get(projectId) ?? 0) < IN_FLIGHT_LOG_MS) return;
+
+  for (const f of listFeatures(projectId)) {
+    if (!f.autopilot || f.archived) continue;
+    const feature = getFeature(f.id);
+    if (!feature) continue;
+    const members = featureMembers(feature.id);
+    const running = members.filter((t) => t.running || hasTurn(t.id));
+    const gating = members.filter(isSettledForGating);
+    const outstanding = members.filter((t) => t.status !== "done" && t.status !== "cancelled" && !t.suggested);
+
+    // "since it settled" / "since it started" — the gate keeps no clock of its
+    // own, and the row's updated_at is the honest answer to "how long has this
+    // been going". Not a duration OF the review, a duration of the wait.
+    const withAge = (t: Task) => `task=${t.id} "${t.title}" ${relAge(t.updated_at)}`;
+
+    if (gating.length) {
+      trace("autopilot", `IN-FLIGHT feature="${feature.name}" gating ${gating.map(withAge).join(" · ")}`);
+    } else if (running.length) {
+      trace("autopilot", `IN-FLIGHT feature="${feature.name}" ${running.length} turn(s) running: ${running.map(withAge).join(" · ")}`);
+    } else if (!outstanding.length && members.length) {
+      // Every member landed and the pass hasn't returned: it is inside the tail
+      // of maybeOpenPr — the feature gate, then the PR, then (if this instance
+      // finishes plans) the ship. Minutes of real work that used to look like a
+      // finished feature sitting still.
+      const last = members.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
+      trace(
+        "autopilot",
+        `IN-FLIGHT feature="${feature.name}" all ${members.length} members landed ${relAge(last.updated_at)} — ` +
+          `finishing: feature gate${feature.pr_url ? "" : " → PR"}${resolveFeatures().autopilotShip ? " → ship" : ""}`
+      );
+    }
+  }
+  st.lastInFlight.set(projectId, Date.now());
+}
+
+/** "3m12s ago", for a log line a human is reading to answer "is this stuck?". */
+function relAge(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s ago`;
 }
 
 /**

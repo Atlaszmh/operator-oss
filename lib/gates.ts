@@ -206,12 +206,46 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   }
 
   const baseBranch = feature?.branch || project.branch;
+  const diff = clip(await diffText(project, task, baseBranch), DIFF_CHARS);
+
+  // NOTHING TO GRADE. A task whose turn was interrupted — a restart, a killed
+  // process — settles with `running` cleared (lib/db.ts does that on boot) and
+  // is then indistinguishable from one that finished: started, not running, not
+  // blocked. So it reaches the gate carrying an empty diff.
+  //
+  // Never send that to a reviewer. Two reasons, and the second is the one that
+  // matters: it costs a full review one-shot (minutes, and real tokens) to be
+  // told there is nothing there — and a reviewer asked to judge nothing MIGHT
+  // PASS it, at which point autopilot merges a no-op and marks the task done
+  // having done none of it. Silent wrong completion is the worst outcome this
+  // gate can produce, and this is the only place it can enter.
+  //
+  // Handled as an ordinary failure so the task gets its turn back and carries on
+  // (the observed case self-healed exactly this way). It does spend one of the
+  // task's attempts, which is the honest cost of not being able to tell an
+  // interrupted turn from an idle one — deliberately not special-cased, because
+  // every "free retry" rule that doesn't increment something is a loop waiting
+  // to happen.
+  if (!diff.trim()) {
+    trace("gate", `NO-WORK task=${task.id} — empty diff, review skipped`);
+    return {
+      ok: false,
+      testsRan: tests.ran,
+      reviewRan: false,
+      feedback:
+        `This task has no changes at all — nothing differs from \`${baseBranch}\`, so there was nothing to review. ` +
+        `Either the previous turn was interrupted before it wrote anything, or the work was never started. ` +
+        `Pick it up from the task description and do it now; if you genuinely believe there is nothing to change, ` +
+        `say so explicitly and explain why rather than ending the turn empty.`,
+    };
+  }
+
   const prompt = buildReviewPrompt({
     taskTitle: task.title,
     taskDescription: task.description,
     featureContext: feature?.context ?? "",
     projectContext: project.context,
-    diff: clip(await diffText(project, task, baseBranch), DIFF_CHARS),
+    diff,
     testOutput: tests.ran
       ? `The project's test command passed.\n${tests.output}`
       : "(this project has no test command, so nothing proved the change runs)",

@@ -38,8 +38,12 @@ beforeEach(() => {
   reviewMock.mockResolvedValue("Looks right.\nVERDICT: PASS");
 });
 
-/** A project on a real git repo, with a feature and one started task holding a worktree. */
-async function gateFixture(patch: { test_command?: string } = {}) {
+/** A project on a real git repo, with a feature and one started task holding a
+ *  worktree. The task has WRITTEN something by default: a gate reached with an
+ *  empty diff is its own case (an interrupted turn) and short-circuits before
+ *  the reviewer, so a fixture with no work in it would be testing that path by
+ *  accident. Pass `work: false` to test it on purpose. */
+async function gateFixture(patch: { test_command?: string; work?: boolean } = {}) {
   const repo = await makeRepo();
   const project = updateProject(createProject({ name: `G-${Math.random().toString(36).slice(2, 8)}` }).id, {
     repo_path: repo,
@@ -49,6 +53,7 @@ async function gateFixture(patch: { test_command?: string } = {}) {
   const feature = createFeature({ project_id: project.id, name: `GF-${Math.random().toString(36).slice(2, 8)}` });
   const task = createTask({ project_id: project.id, title: "Do the thing", feature_id: feature.id });
   const wt = await ensureWorktree(repo, task.id);
+  if (patch.work !== false && wt) fs.writeFileSync(`${wt.path}/${task.id}.txt`, "the work\n");
   const withWt = updateTask(task.id, {
     started: 1,
     status: "in_progress",
@@ -180,6 +185,24 @@ describe("runGate", () => {
     expect(v.reviewRan).toBe(false);
     expect(v.feedback).toMatch(/failed in your worktree/i);
     expect(reviewMock).not.toHaveBeenCalled();
+  });
+
+  // An interrupted turn (a restart, a killed process) settles with `running`
+  // cleared and is then indistinguishable from a finished one, so it reaches the
+  // gate with nothing in it. A reviewer asked to judge nothing might PASS — and
+  // a pass merges a no-op and marks the task done having done none of it.
+  it("never spends a review on a task with no changes at all", async () => {
+    const { project, feature, task } = await gateFixture({ work: false });
+    const v = await runGate(task, project, feature);
+
+    expect(reviewMock).not.toHaveBeenCalled();
+    expect(v.ok).toBe(false);
+    expect(v.reviewRan).toBe(false);
+    // NOT inconclusive: inconclusive sends no turn, so an interrupted task would
+    // sit there being re-gated until it escalated, never picking the work back
+    // up. This has to go back to the agent as work.
+    expect(v.inconclusive).toBeFalsy();
+    expect(v.feedback).toMatch(/no changes at all/i);
   });
 
   it("runs the tests in the task's worktree, not the project repo", async () => {
