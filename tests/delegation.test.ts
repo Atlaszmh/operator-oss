@@ -32,8 +32,8 @@ describe("buildDelegationGuidance", () => {
     expect(g).toContain("`haiku`");
     expect(g).toContain("`fable`");
     // Untiered options never appear.
-    expect(g).not.toContain("opus[1m]");
-    expect(g).not.toContain("claude-opus-4-6");
+    expect(g).not.toContain("opusplan");
+    expect(g).not.toContain("claude-opus-5");
     // Cheapest first, so a skimming planner meets the cheap option before the
     // expensive one.
     expect(g.indexOf("`haiku`")).toBeLessThan(g.indexOf("`fable`"));

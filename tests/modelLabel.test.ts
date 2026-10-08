@@ -12,6 +12,8 @@ const claude = CLAUDE_CAPABILITIES;
 describe("modelLabel", () => {
   it("keeps the version, so Opus 5 never reads as bare Opus", () => {
     expect(modelLabel("claude-opus-5", claude)).toBe("Opus 5");
+    expect(modelLabel("claude-opus-5-5", claude)).toBe("Opus 5.5");
+    expect(modelLabel("claude-fable-5-1", claude)).toBe("Fable 5.1");
     expect(modelLabel("claude-opus-4-8", claude)).toBe("Opus 4.8");
     expect(modelLabel("claude-opus-4-8-20251101", claude)).toBe("Opus 4.8");
     expect(modelLabel("claude-sonnet-5", claude)).toBe("Sonnet 5");
@@ -58,8 +60,9 @@ describe("claude model list", () => {
   });
 
   it("sizes the context gauge per selected variant, not per family", () => {
-    expect(contextWindowOf("opus", claude)).toBe(200_000);
-    expect(contextWindowOf("opus[1m]", claude)).toBe(1_000_000);
-    expect(contextWindowOf("fable", claude)).toBe(1_000_000);
+    expect(contextWindowOf("haiku", claude)).toBe(200_000);
+    expect(contextWindowOf("claude-sonnet-4-6", claude)).toBe(200_000);
+    expect(contextWindowOf("claude-sonnet-4-6[1m]", claude)).toBe(1_000_000);
+    expect(contextWindowOf("opus", claude)).toBe(1_000_000);
   });
 });

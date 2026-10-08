@@ -16,10 +16,11 @@ import type { AgentCapabilities } from "../types";
 // version number on purpose: "Opus" alone can't tell you whether a turn ran on
 // Opus 5 or 4.8, which is the whole question when a family alias moves.
 //
-// contextWindow is the window Claude Code actually runs, not the model's API
-// maximum: a bare family alias runs the standard 200k window and the `[1m]`
-// variant opts into the 1M beta. Fable is the exception — it's 1M natively
-// (`fable[1m]` resolves to plain claude-fable-5), so there's no variant to list.
+// contextWindow is the window Claude Code actually runs. Every current family
+// (Fable 5.1, Opus 5.5, Sonnet 5.5) is 1M natively, so they need no `[1m]`
+// variant; only Haiku and the pinned 4.6 ids still run a 200k default.
+// The labels name the version the alias resolves to under the CLI pinned in
+// the Dockerfile (CLAUDE_CODE_VERSION) — bump both together.
 const K200 = 200_000;
 const M1 = 1_000_000;
 
@@ -27,26 +28,19 @@ const M1 = 1_000_000;
 // buildDelegationGuidance in lib/agents/shared.ts). Only the four current
 // families carry one: offering a planner a pinned legacy version invites it to
 // route real work there because the label sounded capable.
-//
-// ponytail: one model per tier, so heavy work on a very large codebase routes to
-// `fable` rather than `opus[1m]` — the 1M variants are untiered. Widen tier to a
-// list, with window size as a secondary axis, if that costs more than it saves.
 export const CLAUDE_CAPABILITIES: AgentCapabilities = {
   models: [
-    { value: "fable", label: "Fable 5", sub: "most capable · 1M context", contextWindow: M1, group: "Latest", tier: "max" },
-    { value: "opus", label: "Opus 5", sub: "everyday complex work", contextWindow: K200, group: "Latest", tier: "heavy" },
-    { value: "sonnet", label: "Sonnet 5", sub: "efficient for routine tasks", contextWindow: K200, group: "Latest", tier: "standard" },
+    { value: "fable", label: "Fable 5.1", sub: "most capable · 1M context", contextWindow: M1, group: "Latest", tier: "max" },
+    { value: "opus", label: "Opus 5.5", sub: "everyday complex work · 1M context", contextWindow: M1, group: "Latest", tier: "heavy" },
+    { value: "sonnet", label: "Sonnet 5.5", sub: "efficient for routine tasks · 1M context", contextWindow: M1, group: "Latest", tier: "standard" },
     { value: "haiku", label: "Haiku 4.5", sub: "fastest, lowest cost", contextWindow: K200, group: "Latest", tier: "light" },
-    { value: "opusplan", label: "Opus Plan Mode", sub: "Opus while planning, Sonnet after", contextWindow: K200, group: "Latest" },
-    { value: "opus[1m]", label: "Opus 5 (1M)", sub: "long sessions, large codebases", contextWindow: M1, group: "1M context" },
-    { value: "sonnet[1m]", label: "Sonnet 5 (1M)", sub: "long sessions, large codebases", contextWindow: M1, group: "1M context" },
-    { value: "opusplan[1m]", label: "Opus Plan Mode (1M)", sub: "plan on Opus, run on Sonnet 1M", contextWindow: M1, group: "1M context" },
-    { value: "claude-opus-4-8", label: "Opus 4.8", sub: "previous Opus", contextWindow: K200, group: "Pinned versions" },
-    { value: "claude-opus-4-8[1m]", label: "Opus 4.8 (1M)", sub: "previous Opus, 1M context", contextWindow: M1, group: "Pinned versions" },
-    { value: "claude-sonnet-4-6", label: "Sonnet 4.6", sub: "previous Sonnet", contextWindow: K200, group: "Pinned versions" },
-    { value: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 (1M)", sub: "previous Sonnet, 1M context", contextWindow: M1, group: "Pinned versions" },
-    { value: "claude-opus-4-7", label: "Opus 4.7", sub: "legacy", contextWindow: K200, group: "Pinned versions" },
-    { value: "claude-opus-4-6", label: "Opus 4.6", sub: "legacy", contextWindow: K200, group: "Pinned versions" },
+    { value: "opusplan", label: "Opus Plan Mode", sub: "Opus while planning, Sonnet after", contextWindow: M1, group: "Latest" },
+    { value: "claude-fable-5", label: "Fable 5", sub: "previous Fable", contextWindow: M1, group: "Pinned versions" },
+    { value: "claude-opus-5", label: "Opus 5", sub: "previous Opus", contextWindow: M1, group: "Pinned versions" },
+    { value: "claude-sonnet-5", label: "Sonnet 5", sub: "previous Sonnet", contextWindow: M1, group: "Pinned versions" },
+    { value: "claude-opus-4-8", label: "Opus 4.8", sub: "legacy", contextWindow: M1, group: "Pinned versions" },
+    { value: "claude-sonnet-4-6", label: "Sonnet 4.6", sub: "legacy", contextWindow: K200, group: "Pinned versions" },
+    { value: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 (1M)", sub: "legacy, 1M context", contextWindow: M1, group: "Pinned versions" },
   ],
   reasoningOptions: [
     { value: "off", label: "Off", sub: "no extended thinking" },
