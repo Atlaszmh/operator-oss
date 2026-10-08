@@ -17,8 +17,9 @@ import type { AgentCapabilities } from "../types";
 // Opus 5 or 4.8, which is the whole question when a family alias moves.
 //
 // contextWindow is the window Claude Code actually runs. Every current family
-// (Fable 5.1, Opus 5.5, Sonnet 5.5) is 1M natively, so they need no `[1m]`
-// variant; only Haiku and the pinned 4.6 ids still run a 200k default.
+// (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) is 1M natively, so they need no
+// `[1m]` variant; only the pinned Sonnet 4.6 id still runs a 200k default.
+// Verified 2026-10-08 against CLI 2.1.294 (modelUsage[].contextWindow).
 // The labels name the version the alias resolves to under the CLI pinned in
 // the Dockerfile (CLAUDE_CODE_VERSION) — bump both together.
 const K200 = 200_000;
@@ -33,7 +34,7 @@ export const CLAUDE_CAPABILITIES: AgentCapabilities = {
     { value: "fable", label: "Fable 5.1", sub: "most capable · 1M context", contextWindow: M1, group: "Latest", tier: "max" },
     { value: "opus", label: "Opus 5.5", sub: "everyday complex work · 1M context", contextWindow: M1, group: "Latest", tier: "heavy" },
     { value: "sonnet", label: "Sonnet 5.5", sub: "efficient for routine tasks · 1M context", contextWindow: M1, group: "Latest", tier: "standard" },
-    { value: "haiku", label: "Haiku 4.5", sub: "fastest, lowest cost", contextWindow: K200, group: "Latest", tier: "light" },
+    { value: "haiku", label: "Haiku 5.5", sub: "fastest, lowest cost · 1M context", contextWindow: M1, group: "Latest", tier: "light" },
     { value: "opusplan", label: "Opus Plan Mode", sub: "Opus while planning, Sonnet after", contextWindow: M1, group: "Latest" },
     { value: "claude-fable-5", label: "Fable 5", sub: "previous Fable", contextWindow: M1, group: "Pinned versions" },
     { value: "claude-opus-5", label: "Opus 5", sub: "previous Opus", contextWindow: M1, group: "Pinned versions" },

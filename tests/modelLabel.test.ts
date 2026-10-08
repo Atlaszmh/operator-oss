@@ -60,7 +60,6 @@ describe("claude model list", () => {
   });
 
   it("sizes the context gauge per selected variant, not per family", () => {
-    expect(contextWindowOf("haiku", claude)).toBe(200_000);
     expect(contextWindowOf("claude-sonnet-4-6", claude)).toBe(200_000);
     expect(contextWindowOf("claude-sonnet-4-6[1m]", claude)).toBe(1_000_000);
     expect(contextWindowOf("opus", claude)).toBe(1_000_000);
