@@ -316,7 +316,7 @@ export function init(db: Database.Database) {
   migrate(db);
 
   // Reset any stale "running" flags left over from a crash/restart.
-  db.prepare("UPDATE tasks SET running = 0 WHERE running = 1").run();
+  db.prepare("UPDATE tasks SET running = 0, state_since = ? WHERE running = 1").run(Date.now());
   // Drop any queued follow-ups: the turns they were lined up behind died with
   // the previous process, so there's nothing left to dequeue them.
   db.prepare("DELETE FROM pending_messages").run();
@@ -477,6 +477,9 @@ export function migrate(db: Database.Database) {
   if (!taskCols.includes("gate_attempts")) db.exec("ALTER TABLE tasks ADD COLUMN gate_attempts INTEGER NOT NULL DEFAULT 0");
   if (!taskCols.includes("blocked_reason")) db.exec("ALTER TABLE tasks ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''");
   if (!taskCols.includes("gate_retry_at")) db.exec("ALTER TABLE tasks ADD COLUMN gate_retry_at INTEGER NOT NULL DEFAULT 0");
+  // When the task entered its current visible state (status/running/awaiting).
+  // 0 = never tracked; the client falls back to updated_at.
+  if (!taskCols.includes("state_since")) db.exec("ALTER TABLE tasks ADD COLUMN state_since INTEGER NOT NULL DEFAULT 0");
   // Autopilot columns on features (added after the feature layer shipped). The
   // features table itself is CREATE IF NOT EXISTS, so only these two need a
   // migration entry — an older DB has the table but not the columns.

@@ -184,6 +184,16 @@ export function waitedFor(since: number): string {
   const d = Math.round(h / 24);
   return `${d} day${d === 1 ? "" : "s"}`;
 }
+// How long a task has sat in its current state ("20m", "2h 5m", "3d 4h") —
+// the timer on each task card. state_since is 0 on rows from before tracking.
+export function inState(t: { state_since: number; updated_at: number }): string {
+  const m = Math.floor((Date.now() - (t.state_since || t.updated_at)) / 60000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
 /** A raw millisecond span as "8s" / "1m 52s". Unlike duration() there's no
  *  "active" sentinel — 0 is a real, renderable answer here (a clock that has
  *  just started), which is exactly what a live counter shows on its first tick. */

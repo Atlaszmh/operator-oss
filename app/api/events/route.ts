@@ -104,6 +104,7 @@ export async function GET(req: Request) {
           status: t.status,
           awaiting_count: countAwaiting(t.project_id),
           outcome: t.outcome,
+          state_since: t.state_since,
         };
         send(payload);
       });

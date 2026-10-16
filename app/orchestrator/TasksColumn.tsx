@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
-import { isAwaiting, isGating, modelLabel, relTime, featureState, isFinished, FEATURE_STATE_LABEL, GATING_LABEL, GATING_HINT } from "./format";
+import { isAwaiting, isGating, modelLabel, relTime, inState, featureState, isFinished, FEATURE_STATE_LABEL, GATING_LABEL, GATING_HINT } from "./format";
 import { SLABEL, AWAIT_LABEL, SEARCH_MIN, STATUSES, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel, capsFor } from "./agents";
-import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip } from "./shared";
+import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip, useTick } from "./shared";
 import { TaskCardSkeleton } from "./Layout";
 import { TaskBoard } from "./TaskBoard";
 
@@ -16,14 +16,18 @@ function TaskCard({ task, agents, selected, running, armed, blockedBy, onSelect,
   const blocked = !!blockedBy?.length && !task.started;
   // Awaiting wins over running: a turn parked on a question is live but really
   // waiting on you, so it should read "waiting", not "working".
-  const activity = awaiting ? `waiting on you · ${relTime(task.updated_at)}`
-    : running ? "live · working"
-    // Since the turn ended, not since the review started — the gate keeps no
-    // timestamp of its own, and "handed back 6m ago" is the honest reading.
-    : gating ? `reviewing · handed back ${relTime(task.updated_at)}`
-    : task.status === "done" ? `done · ${relTime(task.updated_at)}`
-    : task.status === "cancelled" ? `cancelled · ${relTime(task.updated_at)}`
-    : task.started ? relTime(task.updated_at) : "not started";
+  useTick();
+  // Every label counts time in the CURRENT state (state_since), not since the
+  // last write — updated_at moves on every cost tick and would keep resetting.
+  // The gate starts the moment the turn ends, so the same clock covers it.
+  const since = inState(task);
+  const activity = awaiting ? `waiting on you · ${since}`
+    : running ? `live · working · ${since}`
+    : gating ? `reviewing · ${since}`
+    : task.status === "done" ? `done · ${relTime(task.state_since || task.updated_at)}`
+    : task.status === "cancelled" ? `cancelled · ${relTime(task.state_since || task.updated_at)}`
+    : task.status === "on_hold" ? `held · ${since}`
+    : task.started ? `idle · ${since}` : "not started";
   return (
     <button className={`task ${selected ? "sel" : ""} ${awaiting ? "awaiting" : ""}`} onClick={onSelect}>
       <div className="task-top">

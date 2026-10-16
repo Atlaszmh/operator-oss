@@ -7,6 +7,12 @@ import { Icon, AgentMark } from "../icons";
 import { SCLS, SLABEL, AWAIT_LABEL } from "./types";
 import { GATING_HINT } from "./format";
 
+// Re-render every `ms` so time-in-state labels keep counting on idle cards.
+export function useTick(ms = 30000) {
+  const [, set] = useState(0);
+  useEffect(() => { const t = setInterval(() => set((n) => n + 1), ms); return () => clearInterval(t); }, [ms]);
+}
+
 export function StatusDot({ status, running, awaiting, gating, lg }: { status: Status; running?: boolean; awaiting?: boolean; gating?: boolean; lg?: boolean }) {
   // Signal language (mission-control): "needs your input" is an alert coral, a
   // *live* working session is blue (both pulse to draw the eye), and an idle

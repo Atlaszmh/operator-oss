@@ -79,6 +79,7 @@ export interface TaskRow {
   started: number;
   running: number;
   awaiting_input: number;
+  state_since: number; // when the visible state last changed (0 = untracked → use updated_at)
   updated_at: number;
   cost_usd: number; // cumulative dollar spend across all turns of this task
   total_tokens: number; // cumulative tokens (input+output+cache) across all turns

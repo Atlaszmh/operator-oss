@@ -114,6 +114,7 @@ export interface Task {
   started: number; // 1 once the initial prompt has been sent
   running: number; // 1 while a Claude turn is actively streaming
   awaiting_input: number; // 1 when it's your turn: Claude's turn ended mid-task, or it's parked on an AskUserQuestion
+  state_since: number; // when status/running/awaiting_input last changed (0 = before tracking) — drives "working · 20m"
   created_at: number;
   updated_at: number;
 }
@@ -320,6 +321,8 @@ export type GlobalTaskEvent = {
   /** The task's business-facing outcome line ("" = none reported yet). Rides
    *  along so a turn that reports one updates the card without a refetch. */
   outcome: string;
+  /** When the task entered this state (Task.state_since). */
+  state_since: number;
 };
 
 // Everything GET /api/events can send. Task lifecycle is the bulk of it;

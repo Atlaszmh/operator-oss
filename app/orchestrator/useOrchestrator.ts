@@ -318,7 +318,7 @@ export function useOrchestrator() {
   // over the task's event stream. A reload mid-turn no longer kills it.
   const runTurn = useCallback(async (taskId: string, text: string, isInitial: boolean) => {
     setTaskRunning(taskId, true);
-    setTasks((prev) => prev.map((x) => (x.id === taskId ? { ...x, started: 1, status: "in_progress", suggested: 0, awaiting_input: 0 } : x)));
+    setTasks((prev) => prev.map((x) => (x.id === taskId ? { ...x, started: 1, status: "in_progress", suggested: 0, awaiting_input: 0, state_since: Date.now() } : x)));
     try {
       const res = await fetch(`/api/tasks/${taskId}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       if (!res.ok) {

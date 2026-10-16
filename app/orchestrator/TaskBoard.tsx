@@ -3,10 +3,10 @@
 import { useState, type ReactNode } from "react";
 import type { Status } from "@/lib/types";
 import { Icon } from "../icons";
-import { isAwaiting, modelLabel, relTime } from "./format";
+import { isAwaiting, modelLabel, relTime, inState } from "./format";
 import { SEARCH_MIN, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
 import { agentLabel, capsFor } from "./agents";
-import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip } from "./shared";
+import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip, useTick } from "./shared";
 
 // The kanban alternative to the grouped task list (layout from the Claude
 // Design "Operator — Board View" study, rendered with the app's own tokens).
@@ -102,12 +102,14 @@ function BoardCard({ task, agents, feature, selected, running, blockedBy, mini, 
   const awaiting = isAwaiting(task);
   const blocked = !!blockedBy?.length && !task.started;
   const sessionCount = task.started ? task.generation : Math.max(0, task.generation - 1);
-  const activity = awaiting ? `waiting on you · ${relTime(task.updated_at)}`
-    : running ? "live · working"
-    : task.status === "done" ? `done · ${relTime(task.updated_at)}`
-    : task.status === "cancelled" ? `cancelled · ${relTime(task.updated_at)}`
-    : task.status === "on_hold" ? `held · ${relTime(task.updated_at)}`
-    : task.started ? relTime(task.updated_at) : "not started";
+  useTick();
+  const since = inState(task);
+  const activity = awaiting ? `waiting on you · ${since}`
+    : running ? `live · working · ${since}`
+    : task.status === "done" ? `done · ${relTime(task.state_since || task.updated_at)}`
+    : task.status === "cancelled" ? `cancelled · ${relTime(task.state_since || task.updated_at)}`
+    : task.status === "on_hold" ? `held · ${since}`
+    : task.started ? `idle · ${since}` : "not started";
   return (
     <article
       role="button" tabIndex={0}
