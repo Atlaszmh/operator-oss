@@ -318,6 +318,9 @@ export function fileConflictResolutionTask(
     description: buildFeatureConflictTaskPrompt(feature.branch, project.branch, conflicts),
     priority: "hi",
     suggested: true,
+    // Explicit, so it doesn't inherit the account default (Fable).
+    model: "opus",
+    reasoning: "think",
   });
   return { task, existing: false };
 }
@@ -366,6 +369,8 @@ export function fileLandResolutionTask(
     description: buildTaskLandConflictPrompt(task.work_branch, baseBranch, conflicts),
     priority: "hi",
     suggested: true,
+    model: "opus",
+    reasoning: "think",
   });
   return { task: created, existing: false };
 }

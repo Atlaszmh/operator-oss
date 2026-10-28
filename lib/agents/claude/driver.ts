@@ -379,6 +379,7 @@ async function summarizeTranscript(transcript: string, project: Project): Promis
       `=== TRANSCRIPT ===\n${transcript}`,
     options: {
       cwd: project.repo_path || process.cwd(),
+      model: "haiku",
       allowedTools: [],
       maxTurns: 1,
       permissionMode: "bypassPermissions",
@@ -439,6 +440,7 @@ async function draftProjectContext(project: Project, digest: string): Promise<st
       `=== RECENT ACTIVITY ===\n${digest || "(none)"}`,
     options: {
       cwd: project.repo_path || process.cwd(),
+      model: "sonnet",
       allowedTools: ["Read", "Grep", "Glob", "Bash"],
       maxTurns: 40,
       permissionMode: "bypassPermissions",
@@ -480,6 +482,7 @@ async function summarizeProjectRecap(project: Project, digest: string): Promise<
       `=== PROJECT CONTEXT ===\n${project.context || "(none)"}\n\n=== RECENT ACTIVITY ===\n${digest}`,
     options: {
       cwd: project.repo_path || process.cwd(),
+      model: "haiku",
       allowedTools: [],
       maxTurns: 1,
       permissionMode: "bypassPermissions",
@@ -510,6 +513,11 @@ async function reviewTask(prompt: string, cwd: string): Promise<string> {
     prompt,
     options: {
       cwd: cwd || process.cwd(),
+      // Pinned, not inherited: omitting `model` runs on the account default
+      // (Fable), and this gate runs once per finished task — it was the bulk
+      // of the instance's Fable spend.
+      model: "opus",
+      ...reasoningOptions("think"),
       allowedTools: ["Read", "Grep", "Glob"],
       // Same bound as draftProjectContext, and for the same reason: this is a
       // repo-EXPLORING loop, not a text-in/text-out one. At 12 a reviewer ran
