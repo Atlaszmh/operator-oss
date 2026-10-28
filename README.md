@@ -105,6 +105,8 @@ Approving covers the work that arrives *later*, too: anything suggested into an 
 
 Pass, and the task merges into the integration branch and the next one starts. Fail, and the reviewer's notes go straight back to the task as its next turn — twice by default (`ORCH_AUTOPILOT_ATTEMPTS`), then it stops and asks you. A merge conflict goes to the task's own agent to resolve, same as the manual flow.
 
+A task that ends with **no changes** is treated as an interrupted turn and sent back, so a killed session can never merge as a silent no-op. The exception is a task whose job really was to change nothing, such as a verification that came back clean. Its agent ends with a `NO CHANGES NEEDED: <reason>` line, and the reviewer checks that claim against the brief rather than the task bouncing until it blocks.
+
 The queue never idles behind its own bookkeeping: a task whose dependencies have landed starts immediately, even while other tasks are still being gated, and when several tasks finish together their gates run in parallel (merges stay serial). Every start, gate, and merge logs its duration, so a slow queue is diagnosable from the server logs.
 
 **When it does stop, the log says why.** Every step is one timestamped line — the event that woke the scheduler, each turn starting and ending, the tests and the review timed separately, each merge, each retry — so `docker logs -t <container> | grep <task-id>` is that task's whole history. And because a stall is the *absence* of events, every pass also records where each feature stands; when nothing can move, it says so and names each outstanding task with what it's waiting for (you, a backoff, or a specific unfinished dependency).

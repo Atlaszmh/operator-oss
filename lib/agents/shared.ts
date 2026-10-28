@@ -61,6 +61,9 @@ export function buildDelegationGuidance(caps: AgentCapabilities): string {
   const lines = [
     `\nWhen you suggest a task, also choose the model it should run on and pass it as \`model\`, ` +
       `so routine work doesn't run on an expensive model and hard work doesn't fail on a cheap one. ` +
+      `Default to the cheapest one that fits: a task whose brief names its files and its acceptance test is ` +
+      `standard work, and that covers most tasks. Choose a heavier model only for judgement the brief can't ` +
+      `supply, and when a cheaper model might struggle, write a tighter brief rather than a pricier model. ` +
       `The options for this project, cheapest first:`,
   ];
   for (const tier of TIER_ORDER) {
@@ -141,6 +144,10 @@ export function buildProjectContext(project: Project, task: Task): string {
       `\`feature\` on each \`suggest_task\`. Feature context is prepended to every member task's ` +
       `session, so writing it once there beats repeating it in twenty task descriptions. Keep it ` +
       `spec-sized: it's re-sent on every turn of every task in the feature.` +
+      `\nAutopilot runs a feature's tasks in parallel wherever their dependencies allow, so set \`blocked_by\` ` +
+      `only when a task needs another's output, not to preserve plan order. Put tasks that edit the same files ` +
+      `in one chain, so they don't conflict. Fold "run the suite and confirm" steps into the task that makes ` +
+      `the change rather than filing them as their own task.` +
       (existing.length
         ? `\nFeatures that already exist in this project (reuse a name to file work into it, ` +
           `and calling \`suggest_feature\` with an existing name UPDATES it rather than duplicating): ` +
@@ -168,9 +175,27 @@ export function buildProjectContext(project: Project, task: Task): string {
       `CRA/webpack-dev-server is pre-cleared via env. ORCH_PUBLIC_HOST is injected into services ` +
       `the orchestrator starts.`
   );
+  lines.push(TEST_LOOP_INSTRUCTION);
+  lines.push(NO_CHANGES_INSTRUCTION);
   lines.push(OUTCOME_INSTRUCTION);
   return lines.join("\n");
 }
+
+// ---------- how to spend time on tests ----------
+//
+// Measured on a 700-task project: about half of all agent wall time went on
+// running test suites and on waiting for them — suites re-run in full after
+// every small edit, long runs backgrounded and then polled with sleep/tail/grep,
+// and 21 wait loops that never ended because `pgrep -f` matched the loop's own
+// command line. The gate re-runs the project's test command anyway.
+
+export const TEST_LOOP_INSTRUCTION =
+  `\n---\nTests: while iterating, run only the tests your change touches; run the full suite once, at the end. ` +
+  `If this task is under autopilot, its gate runs the project's test command again before merging, so a ` +
+  `repeated full run buys nothing. Run long commands in the foreground with a long timeout rather than ` +
+  `backgrounding them and polling. If you must wait on a background process, wait on its PID ` +
+  `(\`wait $pid\`, or \`while kill -0 $pid\`) — never on \`pgrep -f\` or \`grep\` for text that also appears in ` +
+  `your own command line, which matches itself and never finishes.`;
 
 // ---------- the business-facing outcome line ----------
 //
@@ -216,6 +241,32 @@ export function extractOutcome(text: string): string {
   // Strip the markdown the sentence itself may be wrapped in (**…**, `…`).
   found = found.replace(/^[*_`]+|[*_`]+$/g, "").trim();
   return found.length > OUTCOME_MAX ? found.slice(0, OUTCOME_MAX - 1).trimEnd() + "…" : found;
+}
+
+// ---------- the "nothing to change" claim ----------
+//
+// The gate treats an empty diff as an interrupted turn and sends it back
+// (lib/gates.ts). That is right for a killed process and wrong for a task whose
+// whole job was to check something — a validation step that came back clean, a
+// fix that already landed via another task. Before this marker those looped
+// three times on "no changes at all" and blocked: 12 of the 14 autopilot blocks
+// in one 700-task project, and most of the user's manual "just close it" nudges.
+// The claim is explicit and goes to the reviewer, so it can't become the silent
+// no-op merge the empty-diff rule exists to prevent.
+
+export const NO_CHANGES_INSTRUCTION =
+  `\nIf you finish and the task genuinely needs no file changes — a verification whose checks came back ` +
+  `clean, work that is already on the branch — explain why, then add a line on its own in exactly this form:\n` +
+  `NO CHANGES NEEDED: <one sentence saying why>\n` +
+  `Without that line, autopilot treats an empty diff as an interrupted turn and sends the task back.`;
+
+const NO_CHANGES_RE = /^[ \t>#*_-]*no changes needed[ \t*_]*:[ \t]*(\S.*?)[ \t]*$/gim;
+
+/** The last "NO CHANGES NEEDED: …" reason in one message, or "". */
+export function extractNoChangesClaim(text: string): string {
+  let found = "";
+  for (const m of text.matchAll(NO_CHANGES_RE)) found = m[1];
+  return found.replace(/^[*_`]+|[*_`]+$/g, "").trim().slice(0, OUTCOME_MAX);
 }
 
 /**
@@ -343,7 +394,15 @@ export function buildReviewPrompt(input: {
   projectContext: string;
   diff: string;
   testOutput: string;
+  /** The engineer's NO CHANGES NEEDED reason, when the diff is empty on purpose. */
+  noChangesClaim?: string;
 }): string {
+  const emptyDiff = input.noChangesClaim
+    ? `(empty diff — the engineer made no file changes and says: "${input.noChangesClaim}". ` +
+      `PASS only if the task as written above genuinely calls for no file changes and you can confirm the ` +
+      `claim by reading the repo or re-running the check it names. FAIL if the brief asks for any edit, ` +
+      `file, record or commit, however small — and say which.)`
+    : `(empty diff — nothing was changed, which is a FAIL unless the task was purely investigative)`;
   return [
     `You are reviewing one engineer's completed task before it is merged WITHOUT any human review.`,
     `You are the last line of defence, so be exacting — but be exacting about the right things.`,
@@ -364,7 +423,7 @@ export function buildReviewPrompt(input: {
     ``,
     `=== TEST RUN ===\n${input.testOutput || "(no test command configured)"}`,
     ``,
-    `=== DIFF ===\n${input.diff || "(empty diff — nothing was changed, which is a FAIL unless the task was purely investigative)"}`,
+    `=== DIFF ===\n${input.diff || emptyDiff}`,
     ``,
     REVIEW_INSTRUCTION,
   ].join("\n");

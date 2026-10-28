@@ -13,7 +13,8 @@
 import { spawn } from "node:child_process";
 import { taskDiff, cleanTreeSha, withTempWorktree } from "./git";
 import { reviewTask } from "./agents/oneshots";
-import { buildReviewPrompt, parseVerdict, clip } from "./agents/shared";
+import { buildReviewPrompt, parseVerdict, clip, extractNoChangesClaim } from "./agents/shared";
+import { listMessages } from "./store";
 import { resolveFeatures } from "./features";
 import { GATE_TEST_TIMEOUT_MS } from "./config";
 import type { Feature, GateVerdict, Project, Task } from "./types";
@@ -226,7 +227,13 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
   // interrupted turn from an idle one — deliberately not special-cased, because
   // every "free retry" rule that doesn't increment something is a loop waiting
   // to happen.
-  if (!diff.trim()) {
+  //
+  // The one way past: the agent's latest turn says, on a marked line, that the
+  // task needs no changes. An interrupted turn can't say that, so the two cases
+  // finally come apart — and the claim goes to the reviewer, never straight to
+  // a merge.
+  const noChangesClaim = diff.trim() ? "" : latestNoChangesClaim(task.id);
+  if (!diff.trim() && !noChangesClaim) {
     trace("gate", `NO-WORK task=${task.id} — empty diff, review skipped`);
     return {
       ok: false,
@@ -235,10 +242,12 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
       feedback:
         `This task has no changes at all — nothing differs from \`${baseBranch}\`, so there was nothing to review. ` +
         `Either the previous turn was interrupted before it wrote anything, or the work was never started. ` +
-        `Pick it up from the task description and do it now; if you genuinely believe there is nothing to change, ` +
-        `say so explicitly and explain why rather than ending the turn empty.`,
+        `Pick it up from the task description and do it now. If you genuinely believe there is nothing to change, ` +
+        `explain why and end your reply with a line \`NO CHANGES NEEDED: <reason>\` — a reviewer will check that ` +
+        `claim against the task instead of sending it back again.`,
     };
   }
+  if (noChangesClaim) trace("gate", `NO-CHANGES-CLAIM task=${task.id} — empty diff by the agent's account, reviewing the claim`);
 
   const prompt = buildReviewPrompt({
     taskTitle: task.title,
@@ -246,6 +255,7 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
     featureContext: feature?.context ?? "",
     projectContext: project.context,
     diff,
+    noChangesClaim,
     testOutput: tests.ran
       ? `The project's test command passed.\n${tests.output}`
       : "(this project has no test command, so nothing proved the change runs)",
@@ -293,6 +303,21 @@ export async function runGate(task: Task, project: Project, feature: Feature | u
       ? verdict.notes
       : `The review did not pass, so this task was not merged. Address the following, then finish the work:\n\n${verdict.notes}${noTests}`,
   };
+}
+
+/**
+ * The NO CHANGES NEEDED reason from the task's latest turn — the assistant
+ * messages after its last user message — or "". Scoped to that turn so a claim
+ * made before a "you're not done" message can't be replayed past it.
+ */
+function latestNoChangesClaim(taskId: string): string {
+  const msgs = listMessages(taskId);
+  for (let i = msgs.length - 1; i >= 0 && msgs[i].role !== "user"; i--) {
+    if (msgs[i].role !== "assistant") continue;
+    const claim = extractNoChangesClaim(msgs[i].content);
+    if (claim) return claim;
+  }
+  return "";
 }
 
 export interface FeatureGateResult {

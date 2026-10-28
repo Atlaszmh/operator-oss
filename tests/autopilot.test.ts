@@ -31,6 +31,7 @@ import {
   setTaskDeps,
   featureMembers,
   readyMembers,
+  addMessage,
 } from "@/lib/store";
 
 beforeEach(() => {
@@ -203,6 +204,31 @@ describe("runGate", () => {
     // up. This has to go back to the agent as work.
     expect(v.inconclusive).toBeFalsy();
     expect(v.feedback).toMatch(/no changes at all/i);
+    expect(v.feedback).toContain("NO CHANGES NEEDED:");
+  });
+
+  // A verify-only task's job can be to change nothing. Saying so on the marked
+  // line sends the claim to the reviewer instead of bouncing it three times.
+  it("reviews an explicit no-changes claim instead of bouncing the empty diff", async () => {
+    const { project, feature, task } = await gateFixture({ work: false });
+    addMessage(task.id, 1, "user", "Run the determinism check.");
+    addMessage(task.id, 1, "assistant", "All 9 goldens hold.\n**NO CHANGES NEEDED:** the check passed on the branch tip.");
+    const v = await runGate(task, project, feature);
+
+    expect(v.reviewRan).toBe(true);
+    expect(v.ok).toBe(true);
+    expect(reviewMock.mock.calls[0][0]).toContain('says: "the check passed on the branch tip."');
+  });
+
+  it("ignores a no-changes claim made before the latest user message", async () => {
+    const { project, feature, task } = await gateFixture({ work: false });
+    addMessage(task.id, 1, "assistant", "NO CHANGES NEEDED: nothing to do");
+    addMessage(task.id, 1, "user", "This task has no changes at all — do it now.");
+    addMessage(task.id, 1, "assistant", "Working on it.");
+    const v = await runGate(task, project, feature);
+
+    expect(reviewMock).not.toHaveBeenCalled();
+    expect(v.ok).toBe(false);
   });
 
   it("runs the tests in the task's worktree, not the project repo", async () => {
