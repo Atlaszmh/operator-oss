@@ -27,6 +27,8 @@ services:
     mem_limit: ${ORCH_MEM:-4g}
     memswap_limit: ${ORCH_MEM:-4g}
     pids_limit: 1024
+    # Headless Chromium (Playwright E2E) needs more than Docker's 64m default.
+    shm_size: ${ORCH_SHM_SIZE:-64m}
     # Attack-surface hardening. The image runs everything as uid 1000 and
     # needs no capabilities; no-new-privileges blocks setuid re-escalation;
     # the rootfs is immutable — all writes land on the home volume or this
@@ -37,7 +39,7 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=512m
+      - /tmp:rw,nosuid,nodev,size=${ORCH_TMP_SIZE:-512m}
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       GIT_USER_NAME: ${GIT_USER_NAME:-}

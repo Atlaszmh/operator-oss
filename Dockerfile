@@ -85,6 +85,24 @@ RUN npm install -g @openai/codex && codex --version
 RUN npx --yes playwright@1.58.2 install-deps chromium \
   && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# Unity editor (headless batch mode): GTK3 runtime libs the editor links against even
+# with -nographics, plus a Secret Service (dbus + gnome-keyring) so the Unity CLI can
+# store its sign-in for license activation. The editor itself installs into ~/Unity
+# on the home volume (`unity install`), like Godot in ~/bin — only OS deps live here.
+# xz-utils: the Linux editor ships as .tar.xz. unzip: the CLI fetches its licensing client as a .zip.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       xz-utils unzip libgtk-3-0 libxcursor1 ocl-icd-libopencl1 \
+       dbus dbus-user-session gnome-keyring libsecret-1-0 \
+  && rm -rf /var/lib/apt/lists/*
+
+# python3: agents reach for `python3 - <<EOF` to script an edit or parse JSON no
+# matter what the project is written in — 562 of 692 tasks in one project tried
+# it, hit "command not found" and spent a turn switching to node.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 \
+  && rm -rf /var/lib/apt/lists/*
+
 # Replace the base image's `node` user so uid 1000 owns /home/orch — named
 # volumes initialize from this skeleton with correct ownership on first mount.
 RUN userdel -r node \
@@ -128,6 +146,11 @@ ENV NODE_ENV=production \
     CLAUDE_CLI_PATH=/usr/local/bin/claude \
     CODEX_CLI_PATH=/usr/local/bin/codex \
     DISABLE_AUTOUPDATER=1
+
+# Claude Code caps one Bash call at 10 min, below a real project's full E2E run,
+# so agents backgrounded suites and polled them (~18h of one project's agent
+# time). 30 min lets the run stay in the foreground.
+ENV BASH_MAX_TIMEOUT_MS=1800000
 
 USER orch
 EXPOSE 3000
