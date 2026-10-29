@@ -44,7 +44,7 @@ import {
 } from "./store";
 import { startInitialTurn, startResumeTurn } from "./runner";
 import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn } from "./gates";
-import { mergeTask, fastForwardWorktree, worktreeSyncStatus, fetchOrigin, landBranch } from "./git";
+import { mergeTask, fastForwardWorktree, worktreeSyncStatus, fetchOrigin, landBranch, prepareWorktreeMerge } from "./git";
 import { createBranchPr, buildFeaturePrBody, prState } from "./github";
 import { buildConflictPrompt } from "./agents/shared";
 import { subscribeGlobal, publishGlobal, publish } from "./events";
@@ -707,14 +707,9 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   // with the base fresh, instead of gating a stale tree and discovering the same
   // conflict one merge later. Same escalation budget as a merge conflict.
   if (preSync.conflicts.length) {
-    const attempts = task.gate_attempts + 1;
-    if (attempts > AUTOPILOT_ATTEMPTS) {
-      handOffConflict(project, feature, task, base, preSync.conflicts, `catching up to ${base}`);
-      return;
-    }
-    updateTask(task.id, { gate_attempts: attempts });
-    await sendTurn(project, task, buildConflictPrompt(base, preSync.conflicts));
-    return;
+    // "clean": merge-tree was wrong at the margin and the merge just went in, so
+    // the tree is caught up and landing carries on.
+    if ((await askToResolve(project, feature, task, base, preSync.conflicts, `catching up to ${base}`)) !== "clean") return;
   }
 
   if (preSync.behind > 0) {
@@ -747,16 +742,8 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
 
   if (!result.ok) {
     if (result.conflicts?.length) {
-      const attempts = task.gate_attempts + 1;
-      if (attempts > AUTOPILOT_ATTEMPTS) {
-        handOffConflict(project, feature, task, base, result.conflicts, `merging into ${base}`);
-        return;
-      }
-      updateTask(task.id, { gate_attempts: attempts });
-      // Hand the conflict to the task's OWN agent as an ordinary message — the
-      // exact path the client takes for a manual conflict today, moved
-      // server-side. It re-gates when that turn ends.
-      await sendTurn(project, task, buildConflictPrompt(base, result.conflicts));
+      // A "clean" re-merge in the worktree re-gates on the next pass.
+      await askToResolve(project, feature, task, base, result.conflicts, `merging into ${base}`);
       return;
     }
     block(task, `Merging into ${base} failed: ${result.error ?? "unknown error"}`);
@@ -799,6 +786,56 @@ async function land(project: Project, feature: Feature, task: Task): Promise<voi
   trace("autopilot", `MERGED task=${task.id} into ${base} in ${secs(t0)}`);
   note(task, `✓ Autopilot merged this into ${base}.`);
   publishGlobal(task.id, { type: "task_updated" });
+}
+
+/**
+ * Hand a conflict to the task's OWN agent, charged against the same retry budget
+ * as a merge conflict, with the merge actually OPEN in its worktree first.
+ *
+ * Both callers learn of a conflict without leaving one where the agent works:
+ * `catchUpWorktree` only predicts it (merge-tree) and never touches a
+ * conflicting tree, and `landBranch` aborts its failed merge in the repo. The
+ * prompt says "I merged … and hit conflicts", so asking over a clean tree sent
+ * the agent hunting for markers that weren't there, turn after turn, until the
+ * hand-off (ALLO-T788, ALLO-T806 on 2026-10-29). `prepareWorktreeMerge` opens the
+ * merge and leaves its markers; once the agent has edited them, the next land
+ * commits the open merge (`mergeTask` → `commitWorktree`), which concludes it.
+ *
+ * "asked": the agent has the conflict. "handedOff": out of retries, or the merge
+ * couldn't be opened or holds only binary conflicts, so a resolver has it.
+ * "clean": the merge went in without conflicts after all.
+ */
+async function askToResolve(
+  project: Project,
+  feature: Feature,
+  task: Task,
+  base: string,
+  conflicts: string[],
+  what: string
+): Promise<"asked" | "handedOff" | "clean"> {
+  const attempts = task.gate_attempts + 1;
+  if (attempts > AUTOPILOT_ATTEMPTS) {
+    handOffConflict(project, feature, task, base, conflicts, what);
+    return "handedOff";
+  }
+  const open = await prepareWorktreeMerge({
+    repoPath: project.repo_path,
+    worktreePath: task.worktree_path,
+    baseBranch: base,
+    message: `Sync ${base} into ${task.title} (orchestrator task ${task.id})`,
+  });
+  if (open.ok && open.clean) return "clean";
+  if (!open.ok || !open.conflicts.length) {
+    // Nothing the agent can edit (a git failure, or binary files only): don't
+    // spend its turns on it.
+    handOffConflict(project, feature, task, base, open.ok ? open.binaryConflicts : conflicts, what);
+    return "handedOff";
+  }
+  updateTask(task.id, { gate_attempts: attempts });
+  // An ordinary message, the path the client takes for a manual conflict. It
+  // re-gates when that turn ends.
+  await sendTurn(project, task, buildConflictPrompt(base, open.conflicts));
+  return "asked";
 }
 
 /**

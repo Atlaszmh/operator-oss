@@ -768,6 +768,69 @@ describe("conflict hand-off", () => {
     expect(resolver!.description).toContain(parked.work_branch);
   }, 60_000);
 
+  it("opens the conflicting merge in the worktree before asking the agent to resolve it", async () => {
+    const { repo, project, feature, tasks } = await planFixture(1);
+    const t = tasks[0];
+    ensureAutopilot();
+
+    // The resolution turn records what it finds, then resolves the file in place
+    // (no commit, as the prompt asks). Every other turn writes its work file.
+    const seen: { mergeOpen: boolean; markers: boolean }[] = [];
+    runTurnMock.mockImplementation(async function* (task: { id: string; worktree_path: string }, _p: unknown, userText: string) {
+      yield { type: "session", sessionId: `s-${task.id}` };
+      const file = `${task.worktree_path}/${task.id}.txt`;
+      if (/hit merge conflicts/.test(userText)) {
+        let mergeOpen = true;
+        try {
+          execFileSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd: task.worktree_path, stdio: "pipe" });
+        } catch {
+          mergeOpen = false;
+        }
+        seen.push({ mergeOpen, markers: fs.readFileSync(file, "utf8").includes("<<<<<<<") });
+        fs.writeFileSync(file, "resolved\n");
+      } else {
+        fs.writeFileSync(file, "work\n");
+      }
+      yield { type: "assistant", content: "done" };
+      yield { type: "done", sessionId: `s-${task.id}` };
+    });
+
+    // Hold the first gate, plant a conflicting commit on the feature branch under
+    // it (ALLO-T806's shape: two lanes editing one file), then let it land.
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    let first = true;
+    gateMock.mockImplementation(async () => {
+      if (first) { first = false; await held; }
+      return { ok: true, feedback: "", testsRan: true, reviewRan: true };
+    });
+    const pass = sweep(project.id);
+    await vi.waitFor(() => expect(gateMock).toHaveBeenCalled(), { timeout: 15_000 });
+    const git = (...a: string[]) => execFileSync("git", a, { cwd: repo, stdio: "pipe" }).toString();
+    git("checkout", feature.branch);
+    fs.writeFileSync(`${repo}/${t.id}.txt`, "theirs\n");
+    git("add", "-A");
+    git("commit", "-m", "conflicting change");
+    git("checkout", "main");
+    release();
+    await pass;
+
+    // The agent was asked once, and found the merge it was told about.
+    await vi.waitFor(() => expect(seen.length).toBe(1), { timeout: 15_000 });
+    expect(seen[0]).toEqual({ mergeOpen: true, markers: true });
+
+    // Its resolution then lands on the feature branch, and no resolver was filed.
+    await vi.waitFor(
+      async () => {
+        await sweep(project.id);
+        expect(getTask(t.id)!.status).toBe("done");
+      },
+      { timeout: 30_000, interval: 250 }
+    );
+    expect(git("show", `${feature.branch}:${t.id}.txt`)).toBe("resolved\n");
+    expect(featureMembers(feature.id).some((m) => m.title.startsWith("Resolve: land"))).toBe(false);
+  }, 60_000);
+
   it("never files a resolver for a resolver — that is an unbounded task factory", () => {
     expect(isResolutionTask("Resolve: land orch/task-9")).toBe(true);
     expect(isResolutionTask("Add the settings page")).toBe(false);
