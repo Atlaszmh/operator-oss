@@ -47,6 +47,13 @@ import { runGate, gateIsAdvisory, runFeatureGate, featureGateFailure, runTestsIn
 import { mergeTask, fastForwardWorktree, worktreeSyncStatus, fetchOrigin, landBranch, prepareWorktreeMerge } from "./git";
 import { createBranchPr, buildFeaturePrBody, prState } from "./github";
 import { buildConflictPrompt } from "./agents/shared";
+import { INTERRUPTED_REASON } from "./db";
+
+/** The turn sent to a task whose last turn a restart cut off. */
+const RESUME_PROMPT =
+  "Operator restarted while your last turn was running, so that turn was cut off mid-way, along with any command " +
+  "or test run it had going. Your worktree is exactly as it was left. Pick up where you stopped: check `git status` " +
+  "and `git log` to see what is already done, re-run only what you still need, then finish the task.";
 import { subscribeGlobal, publishGlobal, publish } from "./events";
 import { hasTurn } from "./abort";
 import { workStarted, workEnded } from "./idle";
@@ -348,6 +355,15 @@ async function driveFeature(project: Project, feature: Feature): Promise<void> {
     updateTask(t.id, { suggested: 0 });
     note(t, "✓ Autopilot accepted this suggested task — this feature's plan is already approved.");
     publishGlobal(t.id, { type: "task_updated" });
+  }
+
+  // 0.4 Resume a turn a restart cut off (lib/db.ts parks it at boot). Gating it
+  //     instead would review, and merge, whatever half-done state it left.
+  for (const t of featureMembers(feature.id)) {
+    if (t.blocked_reason !== INTERRUPTED_REASON || t.running || hasTurn(t.id)) continue;
+    updateTask(t.id, { blocked_reason: "", awaiting_input: 0 });
+    trace("autopilot", `RESUME task=${t.id} — its turn was cut off by a restart`);
+    await sendTurn(project, t, RESUME_PROMPT);
   }
 
   // 0.5 Un-park anything autopilot stopped for a TRANSIENT reason whose backoff

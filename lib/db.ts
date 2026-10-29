@@ -11,6 +11,9 @@ import { loadPersistedOpenAiKey } from "./openai-key";
 // ~/.zen-orchestrator) so `git clean`/re-clone can't wipe it.
 const DB_PATH = path.join(DB_DIR, "orchestrator.db");
 
+/** The park a turn cut off by a restart is left under (the boot reset below); autopilot resumes it. */
+export const INTERRUPTED_REASON = "⟲ Operator restarted while this task's turn was running, so the turn was cut off. Autopilot resumes it; on a hand-run task, send a message to continue.";
+
 declare global {
   // eslint-disable-next-line no-var
   var __orchDb: Database.Database | undefined;
@@ -315,7 +318,14 @@ export function init(db: Database.Database) {
 
   migrate(db);
 
-  // Reset any stale "running" flags left over from a crash/restart.
+  // Reset any stale "running" flags left over from a crash/restart. A turn still
+  // running here was cut off, so its task is parked first: with `running` clear
+  // it would look finished, and autopilot gated and merged the half-done state it
+  // left. Autopilot resumes a task parked this way (driveFeature); anyone else's
+  // next message clears the park as it does any block.
+  db.prepare(
+    "UPDATE tasks SET blocked_reason = ?, gate_retry_at = 0 WHERE running = 1 AND blocked_reason = '' AND status NOT IN ('done', 'cancelled')"
+  ).run(INTERRUPTED_REASON);
   db.prepare("UPDATE tasks SET running = 0, state_since = ? WHERE running = 1").run(Date.now());
   // Drop any queued follow-ups: the turns they were lined up behind died with
   // the previous process, so there's nothing left to dequeue them.

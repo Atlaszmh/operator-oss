@@ -53,7 +53,7 @@ import { execFileSync } from "node:child_process";
 import { ensureAutopilot, sweep, GATE_STALL_MS } from "@/lib/autopilot";
 import { isResolutionTask } from "@/lib/featureSync";
 import { startInitialTurn } from "@/lib/runner";
-import { getDb } from "@/lib/db";
+import { getDb, INTERRUPTED_REASON } from "@/lib/db";
 import { createFeatureBranch } from "@/lib/git";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "@/lib/config";
 import { makeRepo, tmpDir, git as gitCmd } from "./helpers";
@@ -835,6 +835,44 @@ describe("conflict hand-off", () => {
     expect(isResolutionTask("Resolve: land orch/task-9")).toBe(true);
     expect(isResolutionTask("Add the settings page")).toBe(false);
   });
+});
+
+// A redeploy kills every live turn. The boot reset cleared `running`, which made a
+// cut-off turn look finished, so the first sweep gated and merged the half-done
+// state it left (Alloy's Multiplayer 5 C9, 2026-10-29). Boot now parks such a turn under
+// INTERRUPTED_REASON, and autopilot resumes it instead of gating it.
+describe("restart recovery", () => {
+  it("resumes a turn a restart cut off, and gates it only after that turn ends", async () => {
+    const { project, tasks } = await planFixture(1);
+    const t = tasks[0];
+    // Started and part-way through, as the boot reset leaves a killed turn.
+    updateTask(t.id, { started: 1, status: "in_progress", running: 0, blocked_reason: INTERRUPTED_REASON });
+    const order: string[] = [];
+    gateMock.mockImplementation(async () => {
+      order.push("gate");
+      return { ok: true, feedback: "", testsRan: true, reviewRan: true };
+    });
+    runTurnMock.mockImplementation(async function* (task: { id: string; worktree_path: string }, _p: unknown, userText: string) {
+      order.push(/restarted while your last turn was running/.test(userText) ? "resume" : "turn");
+      yield { type: "session", sessionId: `s-${task.id}` };
+      if (task.worktree_path) fs.writeFileSync(`${task.worktree_path}/${task.id}.txt`, "finished\n");
+      yield { type: "done", sessionId: `s-${task.id}` };
+    });
+    ensureAutopilot();
+
+    await vi.waitFor(
+      async () => {
+        await sweep(project.id);
+        expect(getTask(t.id)!.status).toBe("done");
+      },
+      { timeout: 30_000, interval: 250 }
+    );
+    // Resumed first, never gated mid-way.
+    expect(order[0]).toBe("resume");
+    expect(order).toContain("gate");
+    expect(order.indexOf("gate")).toBeGreaterThan(0);
+    expect(getTask(t.id)!.blocked_reason).toBe("");
+  }, 60_000);
 });
 
 describe("continuous gating", () => {
