@@ -15,7 +15,7 @@ vi.mock("@/lib/agents/oneshots", async (importOriginal) => ({
 import fs from "node:fs";
 import { runGate } from "@/lib/gates";
 import { parseVerdict } from "@/lib/agents/shared";
-import { buildFeaturePrBody } from "@/lib/github";
+import { buildFeaturePrBody, PR_BODY_MAX } from "@/lib/github";
 import { ensureWorktree } from "@/lib/git";
 import { makeRepo } from "./helpers";
 import {
@@ -295,5 +295,19 @@ describe("buildFeaturePrBody", () => {
     // is information, and dropping the row would hide that the task ran at all.
     expect(body).toContain("Unreported");
     expect(body).toContain("f1");
+  });
+
+  it("stays under GitHub's body limit by shortening the spec, never the outcomes", () => {
+    // Alloy's "Multiplayer 5" carried a 66 KB spec, and GitHub refused its PR:
+    // "Body is too long (maximum is 65536 characters)".
+    const outcomes = Array.from({ length: 40 }, (_, i) => ({ title: `Task ${i}`, outcome: `Landed thing ${i}.` }));
+    const body = buildFeaturePrBody({ context: "s".repeat(70_000), description: "Label.", outcomes, featureId: "f2" });
+    expect(body.length).toBeLessThanOrEqual(PR_BODY_MAX);
+    expect(body).toContain("Label.");
+    for (const o of outcomes) expect(body).toContain(o.outcome);
+    expect(body).toMatch(/spec shortened/i);
+    expect(body).toContain("f2");
+    // A short spec is left whole.
+    expect(buildFeaturePrBody({ context: "Short spec.", description: "", outcomes, featureId: "f3" })).not.toMatch(/shortened/i);
   });
 });

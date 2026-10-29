@@ -349,6 +349,9 @@ export function buildPrBody(input: { description?: string; summary?: string; tas
  * already established that a feature's business summary IS its members' outcome
  * lines stacked, so summarizing them again would be a second thing to keep in
  * sync with the first. Pure — exported for tests.
+ *
+ * GitHub refuses a body over PR_BODY_MAX characters, so the spec, the one part
+ * that runs long, is shortened to fit; the outcomes are what a reviewer reads.
  */
 export function buildFeaturePrBody(input: {
   context: string;
@@ -356,19 +359,27 @@ export function buildFeaturePrBody(input: {
   outcomes: { title: string; outcome: string }[];
   featureId: string;
 }): string {
-  const parts: string[] = [];
-  if (input.description?.trim()) parts.push(input.description.trim());
-  if (input.context?.trim()) parts.push(`## Spec\n\n${input.context.trim()}`);
+  const head = input.description?.trim() ? [input.description.trim()] : [];
+  const tail: string[] = [];
   if (input.outcomes.length)
-    parts.push(
+    tail.push(
       `## What landed\n\n` +
         input.outcomes
           .map((o) => `- **${o.title}** — ${o.outcome?.trim() || "_no outcome reported_"}`)
           .join("\n")
     );
-  parts.push(`---\n_Opened by Agent Orchestrator autopilot (feature ${input.featureId})._`);
-  return parts.join("\n\n");
+  tail.push(`---\n_Opened by Agent Orchestrator autopilot (feature ${input.featureId})._`);
+  const spec = input.context?.trim() ?? "";
+  if (!spec) return [...head, ...tail].join("\n\n");
+  const whole = [...head, `## Spec\n\n${spec}`, ...tail].join("\n\n");
+  if (whole.length <= PR_BODY_MAX) return whole;
+  const note = `\n\n_… spec shortened to fit GitHub's limit (${spec.length} characters in all); the full spec is this feature's context in Operator._`;
+  const room = PR_BODY_MAX - (whole.length - spec.length) - note.length;
+  return [...head, `## Spec\n\n${spec.slice(0, Math.max(0, room))}${note}`, ...tail].join("\n\n");
 }
+
+/** GitHub's limit on a PR body, in characters. */
+export const PR_BODY_MAX = 65_536;
 
 /**
  * What github.com currently thinks of a PR we opened.
