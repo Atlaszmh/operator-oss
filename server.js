@@ -276,6 +276,21 @@ Promise.all([app.prepare(), cfAccessImport, serviceRouterImport, envKeysImport])
       process.on(sig, () => process.exit(0));
     }
   }
+  // Before any of that: park every live turn as interrupted (lib/db.ts's
+  // parkLiveTurns), so autopilot resumes it after the restart. Once the agents
+  // die the runner settles their turns as if they had ended, and the next boot
+  // would gate (and merge) the half-done work. Prepended, and added after the
+  // fallback check above so it never stands in for an exit handler.
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.prependListener(sig, () => {
+      try {
+        const n = global.__orchParkLiveTurns?.() ?? 0;
+        if (n) console.log(`[server] ${sig}: parked ${n} live turn(s) as interrupted`);
+      } catch (err) {
+        console.warn(`[server] ${sig}: could not park live turns: ${err?.message || err}`);
+      }
+    });
+  }
 
   server.listen(port, hostname, () => {
     restorePersistedServices();

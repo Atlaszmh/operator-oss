@@ -53,7 +53,8 @@ import { execFileSync } from "node:child_process";
 import { ensureAutopilot, sweep, GATE_STALL_MS } from "@/lib/autopilot";
 import { isResolutionTask } from "@/lib/featureSync";
 import { startInitialTurn } from "@/lib/runner";
-import { getDb, INTERRUPTED_REASON } from "@/lib/db";
+import { getDb, INTERRUPTED_REASON, parkLiveTurns } from "@/lib/db";
+import { claimTurn, unregisterTurn } from "@/lib/abort";
 import { createFeatureBranch } from "@/lib/git";
 import { AUTOPILOT_CONCURRENCY, AUTOPILOT_ATTEMPTS } from "@/lib/config";
 import { makeRepo, tmpDir, git as gitCmd } from "./helpers";
@@ -842,6 +843,31 @@ describe("conflict hand-off", () => {
 // state it left (Alloy's Multiplayer 5 C9, 2026-10-29). Boot now parks such a turn under
 // INTERRUPTED_REASON, and autopilot resumes it instead of gating it.
 describe("restart recovery", () => {
+  it("parks every live turn as interrupted when a stop arrives, and nothing else", async () => {
+    const { tasks } = await planFixture(3);
+    const [live, idle, finished] = tasks;
+    for (const t of tasks) updateTask(t.id, { started: 1, status: "in_progress" });
+    updateTask(finished.id, { status: "done" });
+    const a = claimTurn(live.id)!;
+    const b = claimTurn(finished.id)!;
+    try {
+      // The registry is process-wide, so other tests' live turns may be parked
+      // too: assert on these three rows, not the count.
+      expect(parkLiveTurns(getDb())).toBeGreaterThanOrEqual(1);
+      expect(getTask(live.id)!.blocked_reason).toBe(INTERRUPTED_REASON);
+      expect(getTask(idle.id)!.blocked_reason).toBe("");
+      expect(getTask(finished.id)!.blocked_reason).toBe("");
+      // getDb hands server.js the same function through a global; a second park
+      // leaves an already-parked task as it is.
+      updateTask(live.id, { blocked_reason: "" });
+      global.__orchParkLiveTurns?.();
+      expect(getTask(live.id)!.blocked_reason).toBe(INTERRUPTED_REASON);
+    } finally {
+      unregisterTurn(live.id, a);
+      unregisterTurn(finished.id, b);
+    }
+  });
+
   it("resumes a turn a restart cut off, and gates it only after that turn ends", async () => {
     const { project, tasks } = await planFixture(1);
     const t = tasks[0];

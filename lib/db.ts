@@ -17,6 +17,24 @@ export const INTERRUPTED_REASON = "⟲ Operator restarted while this task's turn
 declare global {
   // eslint-disable-next-line no-var
   var __orchDb: Database.Database | undefined;
+  // eslint-disable-next-line no-var
+  var __orchParkLiveTurns: (() => number) | undefined;
+}
+
+/**
+ * Park every task whose turn is live right now (lib/abort.ts's registry) under
+ * INTERRUPTED_REASON, and return how many. server.js calls it, through the
+ * global getDb sets, the moment a stop signal arrives, synchronously, before the
+ * dying agents unwind: the runner then settles each cut-off turn as if it had
+ * ended (`running` 0), so the boot reset alone can't tell (Alloy's density C4b
+ * merged half-done after a redeploy).
+ */
+export function parkLiveTurns(db: Database.Database): number {
+  const live = [...(global.__orchAbort?.keys() ?? [])];
+  const park = db.prepare(
+    "UPDATE tasks SET blocked_reason = ?, gate_retry_at = 0 WHERE id = ? AND blocked_reason = '' AND status NOT IN ('done', 'cancelled')"
+  );
+  return live.reduce((n, id) => n + park.run(INTERRUPTED_REASON, id).changes, 0);
 }
 
 export function init(db: Database.Database) {
@@ -765,6 +783,7 @@ export function getDb(): Database.Database {
     const db = new Database(DB_PATH);
     init(db);
     global.__orchDb = db;
+    global.__orchParkLiveTurns = () => parkLiveTurns(db);
   }
   return global.__orchDb;
 }
