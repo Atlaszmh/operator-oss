@@ -518,7 +518,14 @@ async function reviewTask(prompt: string, cwd: string): Promise<string> {
       // of the instance's Fable spend.
       model: "opus",
       ...reasoningOptions("think"),
-      allowedTools: ["Read", "Grep", "Glob"],
+      // `tools` is what restricts; `allowedTools` only pre-approves, and under
+      // bypassPermissions everything is approved anyway — so reviewers had Bash
+      // and re-ran whole test suites (2h+ of one gate). No settingSources: a
+      // project's CLAUDE.md, the user's plugins and hooks loaded into every
+      // review (~230K tokens a turn on one project); the prompt already carries
+      // the project and feature context.
+      tools: ["Read", "Grep", "Glob"],
+      settingSources: [],
       // Same bound as draftProjectContext, and for the same reason: this is a
       // repo-EXPLORING loop, not a text-in/text-out one. At 12 a reviewer ran
       // out of turns part-way through a real multi-file diff and returned an

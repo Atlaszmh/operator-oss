@@ -400,7 +400,7 @@ export function buildReviewPrompt(input: {
   const emptyDiff = input.noChangesClaim
     ? `(empty diff — the engineer made no file changes and says: "${input.noChangesClaim}". ` +
       `PASS only if the task as written above genuinely calls for no file changes and you can confirm the ` +
-      `claim by reading the repo or re-running the check it names. FAIL if the brief asks for any edit, ` +
+      `claim by reading the repo. FAIL if the brief asks for any edit, ` +
       `file, record or commit, however small — and say which.)`
     : `(empty diff — nothing was changed, which is a FAIL unless the task was purely investigative)`;
   return [
@@ -414,6 +414,8 @@ export function buildReviewPrompt(input: {
     ``,
     `PASS if it does what was asked and is safe to land. Do NOT fail it over style, naming, or how you`,
     `would have written it. You may read any file in the working directory to check a claim.`,
+    `You cannot run commands: the gate already ran the test command (TEST RUN below). The repo's`,
+    `CLAUDE.md is not preloaded — read the parts of it the diff touches if a convention matters.`,
     ``,
     `=== PROJECT CONTEXT ===\n${input.projectContext || "(none)"}`,
     ``,
