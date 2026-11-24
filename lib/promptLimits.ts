@@ -35,6 +35,7 @@ const CONTEXT_OVERFLOW_RES = [
   /context[_ ]length[_ ]exceeded/i,
   /maximum context length/i,
   /exceeds? the (?:model'?s? )?context (?:window|length|limit)/i,
+  /token count[^\n]{0,40}exceeds/i,
   /(?:input|conversation|message)s? (?:is |are )?too long/i,
   /reduce the length of the messages/i,
 ];

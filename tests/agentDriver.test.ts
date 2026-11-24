@@ -112,9 +112,10 @@ describe("agent registry", () => {
     expect(getDriver("no-such-agent").id).toBe(DEFAULT_AGENT);
     expect(getDriver(null).id).toBe(DEFAULT_AGENT);
     expect(getDriver(undefined).id).toBe(DEFAULT_AGENT);
-    // Codex is a registered driver and resolves to itself, not the fallback.
+    // Codex and Gemini are registered drivers and resolve to themselves, not the fallback.
     expect(getDriver("codex").id).toBe("codex");
-    expect(listDrivers().map((d) => d.id)).toEqual(expect.arrayContaining(["claude", "codex"]));
+    expect(getDriver("gemini").id).toBe("gemini");
+    expect(listDrivers().map((d) => d.id)).toEqual(expect.arrayContaining(["claude", "codex", "gemini"]));
   });
 
   it("stamps new tasks with the project's default agent", () => {

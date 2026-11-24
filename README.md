@@ -4,7 +4,7 @@
 
 ### Run many Claude Code sessions in parallel — across every project — from one screen.
 
-Each **project** carries reusable context. Each **task** is its own agent session — **Claude Code** or **Codex** — in its own git worktree. Drive ten at once, see exactly which one needs you, review every diff before it merges. Runs on your **Max/Pro login** — no API key, no per-token billing.
+Each **project** carries reusable context. Each **task** is its own agent session — **Claude Code**, **Codex**, or **Gemini CLI** — in its own git worktree. Drive ten at once, see exactly which one needs you, review every diff before it merges. Runs on your **Max/Pro, ChatGPT, or Google AI Pro/Ultra + AI Credits login** — no API key, no per-token billing.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node ≥18.18](https://img.shields.io/badge/node-%E2%89%A518.18-brightgreen.svg)](package.json)
@@ -29,7 +29,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 
 - **Parallel sessions** — every task is an isolated git worktree with its own agent session.
 - **Diff review → one-click merge** — or AI conflict resolution, branch sync, and GitHub PR creation.
-- **Pick your agent per task** — Claude Code or Codex, both on subscription logins.
+- **Pick your agent per task** — Claude Code, OpenAI Codex, or Google Gemini CLI, all on subscription logins (including Google One AI Credits auto-usage).
 - **Model delegation** — when an agent plans work, it picks the model and thinking budget for each task it proposes, so a rename doesn't run on your most expensive model and a refactor doesn't fail on your cheapest. Its choice shows on the task card and is editable before the task starts.
 - **Optional feature layer** — group related tasks under a feature (project › feature › task). It carries context every task in it inherits, shows progress at a glance, and can own an integration branch its tasks base off and merge into, so the whole thing lands on `main` as one unit. Agents plan into it with `suggest_feature`. Entirely optional: a task with no feature behaves exactly as before.
 - **Feature branches keep themselves current** — the moment anything lands on your project branch, every other live feature branch merges it in. You stop discovering at ship time that the world moved three features ago: a conflict now surfaces minutes after the merge that caused it, one feature wide, while the session that wrote it is still warm. When a branch genuinely can't follow, it says so on its own tile instead of failing someone else's merge.
@@ -69,6 +69,7 @@ Each **project** carries reusable context. Each **task** is its own agent sessio
 |-|-|
 | **Claude Code** | Fully supported — the reference driver; every feature lands here first. |
 | **OpenAI Codex** | Fully supported — parallel tasks, diff review/merge, `/clear` lineage, interactive questions (via the orchestrator's `ask_user` bridge), and cost tracking. Two caveats from the upstream CLI being non-interactive: dollar figures are **estimated** from token counts × published API prices (ChatGPT-plan auth reports tokens only — shown with a `~`), and there are no mid-turn *command approval* prompts, so the permission modes offered are Auto-run and Plan. [Issues welcome](https://github.com/iishyfishyy/operator-oss/issues). |
+| **Google Gemini CLI** | Fully supported — parallel tasks, model selection across Gemini 3.1 Pro, Gemini 3 Pro/Flash, Gemini 3.8/3.5 Flash & Flash-Lite, and Gemini 2.5 (1M context window), Google subscription login with automatic **Google One AI Credits** (`GOOGLE_ONE_AI` overage strategy set to `always`), `/clear` lineage, interactive questions via the `ask_user` MCP bridge, and estimated API-equivalent cost tracking. |
 
 Want another agent? The driver seam is small — see [adding a new agent](docs/ARCHITECTURE.md).
 
@@ -202,11 +203,12 @@ build) with hot reload — but it compiles each route on first hit and is **much
 so don't run it for day-to-day use.
 
 You need **Node 18.18+**, **macOS or Linux**, and at least one agent CLI: **Claude Code**
-(`npm i -g @anthropic-ai/claude-code`, Pro/Max plan — recommended) or **Codex**
-(`npm i -g @openai/codex`, ChatGPT plan). First run opens a setup wizard that signs the
-agent in from the browser — connecting **either one** completes setup (it becomes the app
+(`npm i -g @anthropic-ai/claude-code`, Pro/Max plan — recommended), **Codex**
+(`npm i -g @openai/codex`, ChatGPT plan), or **Gemini CLI**
+(`npm i -g @google/gemini-cli`, Google account subscription + Google One AI Credits). First run opens a setup wizard that signs the
+agent in from the browser — connecting **any one** completes setup (it becomes the app
 default and the tutorial runs on it) — then drops you into a 2-minute hands-on tutorial.
-A stray `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the launch environment is stripped at
+A stray `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY` in the launch environment is stripped at
 boot (with a warning) so turns bill your subscription, not the API — set
 `ORCH_ALLOW_API_KEY_ENV=1` if you really do want to run on an env-provided key.
 

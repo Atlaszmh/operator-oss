@@ -8,8 +8,8 @@
 // credentials on disk. Worse, each queued follow-up would dequeue and fail the
 // same way, emptying the queue for nothing.
 //
-// So an auth failure is classified here (agent-agnostically — Codex phrases it
-// differently and fails identically), which lets lib/runner.ts append
+// So an auth failure is classified here (agent-agnostically — Codex and Gemini
+// phrase it differently and fail identically), which lets lib/runner.ts append
 // AUTH_EXPIRED_NOTICE for a one-click reconnect, park the queue instead of
 // burning it, and flag the agent instance-wide (lib/agents/connections.ts) so
 // the app can say so in the titlebar rather than only inside the task that
@@ -21,7 +21,8 @@
 //   - Claude Code:  "Failed to authenticate: OAuth session expired and could
 //     not be refreshed"; API-key path: "invalid x-api-key" / 401.
 //   - Codex: "not logged in", "please run codex login", "401 Unauthorized".
-//   - Either provider's raw HTTP rejection: 401 + authentication_error.
+//   - Gemini CLI: "Please set an Auth method", "UNAUTHENTICATED", "API_KEY_INVALID".
+//   - Any provider's raw HTTP rejection: 401 + authentication_error.
 // The 401/403 patterns require a nearby auth word so an unrelated error that
 // merely contains a status code can't trip the banner.
 const AUTH_FAILURE_RES = [
@@ -33,9 +34,11 @@ const AUTH_FAILURE_RES = [
   /invalid[_ ]grant/i,
   /invalid[^.\n]{0,20}(?:api[- ]?key|x-api-key|credentials?|token)/i,
   /(?:api[- ]?key|credentials?)[^.\n]{0,30}(?:invalid|expired|revoked|missing|not found)/i,
+  /API_KEY_INVALID|UNAUTHENTICATED/i,
+  /please set an auth method/i,
   /\bnot (?:logged in|authenticated|signed in)\b/i,
   /(?:re-?authenticate|re-?login|log ?in again|sign ?in again)/i,
-  /run [`'"]?(?:claude|codex)(?: auth)? login/i,
+  /run [`'"]?(?:claude|codex|gemini)(?: auth)? login/i,
   /\b40[13]\b[^\n]{0,60}(?:unauthorized|forbidden|authentication|invalid|expired|api[- ]?key)/i,
   /(?:unauthorized|forbidden)[^\n]{0,40}\b40[13]\b/i,
 ];

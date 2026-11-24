@@ -17,12 +17,14 @@
 import type { AgentCapabilities } from "./types";
 import { CLAUDE_CAPABILITIES } from "./claude/capabilities";
 import { CODEX_CAPABILITIES } from "./codex/capabilities";
+import { GEMINI_CAPABILITIES } from "./gemini/capabilities";
 
 export const DEFAULT_AGENT = "claude";
 
 const CAPABILITIES: Record<string, AgentCapabilities> = {
   claude: CLAUDE_CAPABILITIES,
   codex: CODEX_CAPABILITIES,
+  gemini: GEMINI_CAPABILITIES,
 };
 
 /** Capability descriptor by agent id; unknown/null ids fall back to the default

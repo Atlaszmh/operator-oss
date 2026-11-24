@@ -102,7 +102,7 @@ function relDay(key: string): string {
 // state (color follows the entity, never its rank). Known drivers are pinned;
 // any future driver takes the next unused hue in bundle order.
 const HUE_POOL = ["var(--blue)", "var(--green)", "var(--amber)", "var(--coral)"];
-const HUE_PINS: Record<string, string> = { claude: "var(--blue)", codex: "var(--green)" };
+const HUE_PINS: Record<string, string> = { claude: "var(--blue)", codex: "var(--green)", gemini: "var(--amber)" };
 function agentHues(ids: string[]): Record<string, string> {
   const used = new Set(ids.map((id) => HUE_PINS[id]).filter(Boolean));
   const pool = HUE_POOL.filter((h) => !used.has(h));

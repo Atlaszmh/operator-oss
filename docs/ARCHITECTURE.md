@@ -55,8 +55,9 @@ The app talks to coding agents only through the `AgentDriver` interface.
   **`/api/agents/[id]/{login,login/code,verify,api-key,status}`** resolve
   `getDriverStrict(id)` and call its auth surface, so a new agent costs zero new routes;
   `connections.ts` records which agents are connected. Each agent's credentials live under
-  `$HOME` (Claude `~/.claude`, Codex `~/.codex`); the optional per-token API-key paths
-  persist to a 0600 file (`lib/anthropic-key.ts` / `lib/openai-key.ts`).
+  `$HOME` (Claude `~/.claude`, Codex `~/.codex`, Gemini `~/.gemini`); the optional per-token
+  API-key paths persist to a 0600 file (`lib/anthropic-key.ts` / `lib/openai-key.ts` /
+  `lib/gemini-key.ts`).
 
 ### The Claude driver (`lib/agents/claude/driver.ts`)
 
@@ -94,6 +95,18 @@ approval**, so on-request approval modes aren't offered — permission modes are
 bounded by an item cap — the codex analog of the Claude helpers' `maxTurns` — so a
 runaway helper turn is cut off rather than looping unbounded.
 Binary via `CODEX_CLI_PATH` (else the SDK auto-resolves its bundled binary / PATH).
+
+### The Gemini CLI driver (`lib/agents/gemini/driver.ts`)
+
+Driven by the user's Google account subscription login (`oauth-personal` / Code Assist
+with `billing.overageStrategy: "always"` in `~/.gemini/settings.json` so Google One AI
+Credits are consumed automatically on eligible Gemini 3 / 3.1 models) or an optional
+`GEMINI_API_KEY`. Spawns `gemini -p <prompt> --output-format stream-json` with
+`--approval-mode <yolo|auto_edit|plan>` and normalizes its JSONL stream (`init`, `message`,
+`tool_use`, `tool_result`, `error`, `result`) via `lib/agents/gemini/events.ts`. Uses the
+portable stdio MCP bridge (`scripts/orch-mcp.mjs`) for `suggest_task`, `suggest_feature`,
+`expose_service`, and `ask_user` (with Gemini CLI's built-in interactive-only `ask_user`
+excluded so the model calls the orchestrator's interactive `ask_user` card).
 
 ### Internal one-shots (`lib/agents/oneshots.ts`)
 
@@ -133,17 +146,17 @@ lives in the transcript. Both the in-process server and the endpoints call the S
 logic in **`lib/agentTools.ts`**, and both build their tool defs from the SAME constants in
 **`lib/agentToolDefs.mjs`**, so the two paths can't drift.
 
-### Adding a third agent (e.g. Gemini, Cursor)
+### Adding a new agent (e.g. Cursor)
 
 Implement the `AgentDriver` interface in `lib/agents/<id>/driver.ts` (`runTurn()` is the
 only required method — the one-shot helpers are optional and fall back to the utility
 agent), register it in `lib/agents/registry.ts`, and ship its CLI in the `Dockerfile`
-(installed on `PATH` next to `claude` / `codex`). No edits to the runner, routes,
+(installed on `PATH` next to `claude` / `codex` / `gemini`). No edits to the runner, routes,
 recap/refresh jobs, or UI data flow — the capability descriptor drives the pickers, the
 `/api/agents/[id]/*` routes are generic, and `getDriver(task.agent)` resolves it
 everywhere. The driver contract test (`tests/agentDriver.test.ts`) and the event-mapping
-test (`tests/codexEvents.test.ts`) are the templates for pinning a new driver to the same
-`StreamEvent` contract.
+tests (`tests/codexEvents.test.ts`, `tests/geminiEvents.test.ts`) are the templates for
+pinning a new driver to the same `StreamEvent` contract.
 
 ## Everything else, by module
 

@@ -570,7 +570,7 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 [data-theme="dark"] .pri.med{color:#DCB458;}
 
 /* suggested tray */
-.suggest{margin:6px 10px 12px;border-radius:var(--r-lg);border:1px dashed var(--accent);background:var(--accent-soft);overflow:hidden;}
+.suggest{margin:10px 10px 0;border-radius:var(--r-lg);border:1px dashed var(--accent);background:var(--accent-soft);overflow:hidden;}
 .suggest-h{display:flex;align-items:center;gap:7px;padding:10px 13px 8px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-ink);}
 [data-theme="dark"] .suggest-h{color:#D98C6A;}
 .suggest-h .sp{margin-left:auto;font-weight:600;}

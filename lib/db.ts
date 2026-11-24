@@ -6,6 +6,7 @@ import { DB_DIR, PROJECTS_DIR, SERVICE_PORT_BASE } from "./config";
 import { deriveProjectKey, uniqueProjectKey } from "./keys";
 import { loadPersistedApiKey } from "./anthropic-key";
 import { loadPersistedOpenAiKey } from "./openai-key";
+import { loadPersistedGeminiKey } from "./gemini-key";
 
 // Single shared connection. Stored outside the repo (ORCH_DB_DIR, default
 // ~/.zen-orchestrator) so `git clean`/re-clone can't wipe it.
@@ -358,6 +359,8 @@ export function init(db: Database.Database) {
   // Same for a persisted OpenAI API key (the Codex "I have a key instead" path)
   // so the `codex` children pick it up.
   loadPersistedOpenAiKey();
+  // And for a persisted Gemini API key (the Gemini "I have a key instead" path).
+  loadPersistedGeminiKey();
 }
 
 // The first-run wizard shows when `onboarding_complete` is unset. A brand-new DB

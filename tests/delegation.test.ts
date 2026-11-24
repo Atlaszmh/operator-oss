@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { CLAUDE_CAPABILITIES } from "@/lib/agents/claude/capabilities";
 import { CODEX_CAPABILITIES } from "@/lib/agents/codex/capabilities";
+import { GEMINI_CAPABILITIES } from "@/lib/agents/gemini/capabilities";
 import { buildDelegationGuidance } from "@/lib/agents/shared";
 import { createProject, createTask, getTask } from "@/lib/store";
 import type { AgentCapabilities } from "@/lib/agents/types";
@@ -9,7 +10,11 @@ import type { AgentCapabilities } from "@/lib/agents/types";
 // would be silently dropped from the menu, so the descriptors are pinned here
 // rather than the generator defensively picking a winner.
 describe("model tiers", () => {
-  for (const [name, caps] of [["claude", CLAUDE_CAPABILITIES], ["codex", CODEX_CAPABILITIES]] as const) {
+  for (const [name, caps] of [
+    ["claude", CLAUDE_CAPABILITIES],
+    ["codex", CODEX_CAPABILITIES],
+    ["gemini", GEMINI_CAPABILITIES],
+  ] as const) {
     it(`${name} declares each tier at most once`, () => {
       const tiers = caps.models.map((m) => m.tier).filter(Boolean);
       expect(tiers.length).toBe(new Set(tiers).size);

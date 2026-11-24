@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { modelLabel, contextWindowOf } from "@/app/orchestrator/format";
 import { CLAUDE_CAPABILITIES } from "@/lib/agents/claude/capabilities";
 import { CODEX_CAPABILITIES } from "@/lib/agents/codex/capabilities";
+import { GEMINI_CAPABILITIES } from "@/lib/agents/gemini/capabilities";
 
 const claude = CLAUDE_CAPABILITIES;
 
@@ -32,6 +33,9 @@ describe("modelLabel", () => {
     // "gpt-5.4-mini" also contains "gpt-5.4" — longest-first matching must not
     // let the shorter value shadow the more specific one.
     expect(modelLabel("gpt-5.4-mini", CODEX_CAPABILITIES)).toBe("GPT-5.4 Mini");
+    expect(modelLabel("gemini-3.1-pro-preview", GEMINI_CAPABILITIES)).toBe("Gemini 3.1 Pro");
+    expect(modelLabel("gemini-3.5-flash-lite", GEMINI_CAPABILITIES)).toBe("Gemini 3.5 Flash-Lite");
+    expect(modelLabel("gemini-3-pro", GEMINI_CAPABILITIES)).toBe("Gemini 3 Pro");
   });
 
   it("degrades to the family, then the raw id", () => {

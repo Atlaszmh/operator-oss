@@ -44,6 +44,7 @@ const USAGE_LIMIT_RES = [
   /(?:exceeded|exhausted)[^.\n]{0,30}(?:your|current|the)[^.\n]{0,20}quota/i,
   /quota[^.\n]{0,30}(?:exceeded|exhausted|reached)/i,
   /insufficient[_ ]quota/i,
+  /RESOURCE_EXHAUSTED|TerminalQuotaError|ModelQuotaError/i,
   /out of (?:usage|quota|credits)/i,
   /\b429\b[^\n]{0,60}(?:rate[_ ]limit|quota|usage limit|too many requests)/i,
   /too many requests[^\n]{0,40}\b429\b/i,

@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { isAwaiting, isGating, modelLabel, relTime, inState, featureState, isFinished, FEATURE_STATE_LABEL, GATING_LABEL, GATING_HINT } from "./format";
-import { SLABEL, AWAIT_LABEL, SEARCH_MIN, STATUSES, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
+import { SLABEL, AWAIT_LABEL, SEARCH_MIN, type ProjectRow, type TaskRow, type FeatureRow, type AgentsBundle, type TaskView } from "./types";
+import type { Status } from "@/lib/types";
 import { agentLabel, capsFor } from "./agents";
 import { StatusDot, PriPill, SearchBar, AgentBadge, FeatureChip, useTick } from "./shared";
 import { TaskCardSkeleton } from "./Layout";
@@ -199,17 +200,18 @@ function useCollapsed(key: string, def: boolean) {
   return [collapsed, toggle] as const;
 }
 
-// Tasks inside a feature group, ordered by status — the working set first, the
-// graveyard last. Manual position needs no tiebreak here: listTasks already
-// returns the project's tasks in position order and Array#sort is stable, so
-// relative position survives within each status band.
+// Tasks inside a feature group: active first, then the queue, then the finished
+// (most recently finished first). Not STATUSES order — that lists not_started
+// first, which buried the live work under the backlog. Unfinished bands need no
+// tiebreak: listTasks returns position order and Array#sort is stable.
 //
 // Keeping done/cancelled INSIDE their feature is the point: a shipped feature
 // collapses to one line instead of spraying rows into two distant global
 // buckets on the other side of the list.
-const STATUS_RANK = new Map(STATUSES.map((s, i) => [s, i]));
+const BAND: Record<Status, number> = { in_progress: 0, on_hold: 1, not_started: 2, done: 3, cancelled: 4 };
+const finishedAt = (t: TaskRow) => t.state_since || t.updated_at;
 const byStatus = (a: TaskRow, b: TaskRow) =>
-  (STATUS_RANK.get(a.status) ?? 9) - (STATUS_RANK.get(b.status) ?? 9);
+  BAND[a.status] - BAND[b.status] || (BAND[a.status] >= 3 ? finishedAt(b) - finishedAt(a) : 0);
 
 // One feature's section: header plus its (collapsible) tasks. Finished features
 // default to collapsed — a shipped feature is history, and folding it is the
@@ -298,19 +300,31 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
   for (const list of byFeature.values()) list.sort(byStatus);
   // A feature renders when it has matching tasks, or — absent a search — always,
   // so a freshly created (still empty) feature is visible enough to fill.
-  // Finished ones sink to the bottom of the working set (sort is stable, so
-  // manual position survives within each band) on their way to being archived.
+  // Features are banded like the status groups — active (a live task, or a PR
+  // waiting on you), queued, finished — and each band renders next to its loose
+  // counterpart, so the whole list reads active → queued → recently done.
   const visible = (f: FeatureRow) => (byFeature.get(f.id)?.length ?? 0) > 0 || !q;
-  const shownFeatures = activeFeatures
-    .filter(visible)
-    .sort((a, b) => Number(isFinished(featureState(a))) - Number(isFinished(featureState(b))));
+  const featureBand = (f: FeatureRow) => {
+    const s = featureState(f);
+    if (isFinished(s)) return 2;
+    return s === "in_review" || byFeature.get(f.id)?.some((t) => t.status === "in_progress") ? 0 : 1;
+  };
+  const shownFeatures = activeFeatures.filter(visible);
+  const featuresIn = (band: number) => shownFeatures.filter((f) => featureBand(f) === band).map((f) => (
+    <FeatureGroup
+      key={f.id} feature={f} tasks={byFeature.get(f.id) ?? []} agents={agents}
+      selTaskId={selTaskId} running={running} blockedBy={blockedBy} afterNames={afterNamesFor(f)}
+      onSelect={onSelectTask} onOpen={() => onSelectFeature(f.id)}
+      onSetArchived={(archived) => onSetFeatureArchived(f.id, archived)}
+    />
+  ));
   const archivedFeatures = features.filter((f) => f.archived && visible(f));
   const groups = {
     a: loose.filter((t) => t.status === "in_progress" && !isAwaiting(t)),
     h: loose.filter((t) => t.status === "on_hold" && !isAwaiting(t)),
     r: loose.filter((t) => t.status === "not_started"),
-    g: loose.filter((t) => t.status === "done").sort((a, b) => b.updated_at - a.updated_at),
-    x: loose.filter((t) => t.status === "cancelled").sort((a, b) => b.updated_at - a.updated_at),
+    g: loose.filter((t) => t.status === "done").sort(byStatus),
+    x: loose.filter((t) => t.status === "cancelled").sort(byStatus),
   };
   // Suggested tasks sub-grouped by feature, so an agent's twenty-task breakdown
   // arrives as one labelled block instead of twenty loose cards.
@@ -372,6 +386,36 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
         </div>
       ) : (
       <div className="scroll">
+        {/* Pending approval leads the list: these wait on nothing but you, and
+            at the bottom a filed plan was easy to miss entirely. */}
+        {shownSuggested.length > 0 && (
+          <div className="suggest">
+            <div className="suggest-h">{Icon.spark()} Pending approval<span className="sp">{shownSuggested.length}</span></div>
+            {/* Sub-headed by feature: a planner's breakdown arrives as one
+                labelled block rather than N unrelated cards. Ungrouped
+                suggestions (key null) render first, with no sub-head. */}
+            {[...sugByFeature.entries()]
+              .sort((a, b) => (a[0] === null ? -1 : b[0] === null ? 1 : 0))
+              .map(([fid, items]) => (
+              <div key={fid ?? "_none"} className="sug-feat-block">
+                {fid && <div className="sug-feat-h">{featureName(fid)}<span className="sp">{items.length}</span></div>}
+                {items.map((s) => (
+              <div key={s.id} className="sug">
+                <StatusDot status="not_started" />
+                <div className="sg-meta">
+                  <div className="sg-name">{s.title}</div>
+                  {s.description && <div className="sg-why">{s.description}</div>}
+                </div>
+                <button className="sug-dismiss" title="Edit title & description" onClick={() => onEditTask(s.id)}>{Icon.edit()}</button>
+                <button className="sug-add" title="Add to task list to start later" onClick={() => onAcceptSuggestion(s.id)}>{Icon.plus()} Add</button>
+                <button className="sug-btn" onClick={() => onStartSuggestion(s.id)}>{Icon.play()} Start</button>
+                <button className="sug-dismiss" title="Dismiss" onClick={() => onDismissSuggestion(s.id)}>{Icon.x()}</button>
+              </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="task-scroll">
           {tasks.length === 0 && <div className="empty" style={{ padding: "30px 16px" }}><div className="e-t">No tasks yet</div><div className="e-s">Create one to start an agent session.</div></div>}
           {noMatches && <div className="search-empty">No tasks match “{query.trim()}”.</div>}
@@ -381,21 +425,16 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
             featureOf={(t) => (t.feature_id ? features.find((f) => f.id === t.feature_id) : undefined)}
             onOpenFeature={onSelectFeature}
           />
-          {/* Feature groups sit above the status groups, which now hold only the
-              ungrouped tasks. "Needs your input" stays pinned across all of them:
-              scattering it into collapsible sections would break the one view
-              that answers "what is blocking me". */}
-          {shownFeatures.map((f) => (
-            <FeatureGroup
-              key={f.id} feature={f} tasks={byFeature.get(f.id) ?? []} agents={agents}
-              selTaskId={selTaskId} running={running} blockedBy={blockedBy} afterNames={afterNamesFor(f)}
-              onSelect={onSelectTask} onOpen={() => onSelectFeature(f.id)}
-              onSetArchived={(archived) => onSetFeatureArchived(f.id, archived)}
-            />
-          ))}
+          {/* Active → queued → finished, each band its feature groups first and
+              then the loose tasks of the same band. "Needs your input" stays
+              pinned above all of them: scattering it into collapsible sections
+              would break the one view that answers "what is blocking me". */}
+          {featuresIn(0)}
           <TaskGroup label="In progress" tasks={groups.a} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} />
           <TaskGroup label="On hold" tasks={groups.h} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} />
+          {featuresIn(1)}
           <TaskGroup label="Not started" tasks={groups.r} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} />
+          {featuresIn(2)}
           <TaskGroup label="Done" tasks={groups.g} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} collapsible collapsed={doneCollapsed && !q} onToggle={toggleDone} />
           <TaskGroup label="Cancelled" tasks={groups.x} agents={agents} selTaskId={selTaskId} running={running} blockedBy={blockedBy} onSelect={onSelectTask} collapsible collapsed={cancelledCollapsed && !q} onToggle={toggleCancelled} />
           {/* Shipped features land here on their own (POST /features/:id/ship
@@ -423,34 +462,6 @@ export function TasksColumn({ project, agents, features, tasks, suggested, selTa
             </>
           )}
         </div>
-        {shownSuggested.length > 0 && (
-          <div className="suggest">
-            <div className="suggest-h">{Icon.spark()} Suggested by agents<span className="sp">{shownSuggested.length}</span></div>
-            {/* Sub-headed by feature: a planner's breakdown arrives as one
-                labelled block rather than N unrelated cards. Ungrouped
-                suggestions (key null) render first, with no sub-head. */}
-            {[...sugByFeature.entries()]
-              .sort((a, b) => (a[0] === null ? -1 : b[0] === null ? 1 : 0))
-              .map(([fid, items]) => (
-              <div key={fid ?? "_none"} className="sug-feat-block">
-                {fid && <div className="sug-feat-h">{featureName(fid)}<span className="sp">{items.length}</span></div>}
-                {items.map((s) => (
-              <div key={s.id} className="sug">
-                <StatusDot status="not_started" />
-                <div className="sg-meta">
-                  <div className="sg-name">{s.title}</div>
-                  {s.description && <div className="sg-why">{s.description}</div>}
-                </div>
-                <button className="sug-dismiss" title="Edit title & description" onClick={() => onEditTask(s.id)}>{Icon.edit()}</button>
-                <button className="sug-add" title="Add to task list to start later" onClick={() => onAcceptSuggestion(s.id)}>{Icon.plus()} Add</button>
-                <button className="sug-btn" onClick={() => onStartSuggestion(s.id)}>{Icon.play()} Start</button>
-                <button className="sug-dismiss" title="Dismiss" onClick={() => onDismissSuggestion(s.id)}>{Icon.x()}</button>
-              </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
       )}
     </div>

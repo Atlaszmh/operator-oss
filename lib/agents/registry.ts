@@ -15,6 +15,7 @@
 import type { AgentDriver } from "./types";
 import { claudeDriver } from "./claude/driver";
 import { codexDriver } from "./codex/driver";
+import { geminiDriver } from "./gemini/driver";
 
 export { DEFAULT_AGENT } from "./capabilities";
 import { DEFAULT_AGENT } from "./capabilities";
@@ -24,7 +25,13 @@ import { DEFAULT_AGENT } from "./capabilities";
 // modules; a top-level map literal would crash on an import cycle).
 let DRIVERS: Record<string, AgentDriver> | null = null;
 function drivers(): Record<string, AgentDriver> {
-  if (!DRIVERS) DRIVERS = { [claudeDriver.id]: claudeDriver, [codexDriver.id]: codexDriver };
+  if (!DRIVERS) {
+    DRIVERS = {
+      [claudeDriver.id]: claudeDriver,
+      [codexDriver.id]: codexDriver,
+      [geminiDriver.id]: geminiDriver,
+    };
+  }
   return DRIVERS;
 }
 

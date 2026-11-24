@@ -75,6 +75,11 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude 
 # PATH lookup and the auth helpers resolve it next to `claude`.
 RUN npm install -g @openai/codex && codex --version
 
+# The `gemini` CLI (the Gemini agent driver drives it via stream-json; Google
+# subscription + Google One AI Credits login state lives in ~/.gemini on the
+# volume). Installed globally next to `claude` and `codex`.
+RUN npm install -g @google/gemini-cli && gemini --version
+
 # Chromium's shared libraries (libnss3/libatk/libgbm/libasound/...). Projects
 # with Playwright e2e tests and the Playwright MCP server both need these, and
 # neither can install them at runtime: the rootfs is read-only and the container
@@ -107,7 +112,7 @@ RUN apt-get update \
 # volumes initialize from this skeleton with correct ownership on first mount.
 RUN userdel -r node \
   && useradd --create-home --uid 1000 --home-dir /home/orch --shell /bin/bash orch \
-  && mkdir -p /home/orch/.zen-orchestrator /home/orch/worktrees /home/orch/projects /home/orch/.claude /home/orch/.codex \
+  && mkdir -p /home/orch/.zen-orchestrator /home/orch/worktrees /home/orch/projects /home/orch/.claude /home/orch/.codex /home/orch/.gemini \
   && chown -R orch:orch /home/orch
 
 WORKDIR /app
@@ -145,6 +150,8 @@ ENV NODE_ENV=production \
     ORCH_WORKTREES_DIR=/home/orch/worktrees \
     CLAUDE_CLI_PATH=/usr/local/bin/claude \
     CODEX_CLI_PATH=/usr/local/bin/codex \
+    GEMINI_CLI_PATH=/usr/local/bin/gemini \
+    GEMINI_CLI_NO_RELAUNCH=1 \
     DISABLE_AUTOUPDATER=1
 
 # Claude Code caps one Bash call at 10 min, below a real project's full E2E run,

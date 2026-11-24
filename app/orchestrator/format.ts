@@ -149,7 +149,14 @@ export function modelLabel(id: string | null, caps?: AgentCapabilities): string 
   const hit = (caps?.models ?? [])
     .filter((o) => s.includes(o.value.toLowerCase()))
     .sort((a, b) => b.value.length - a.value.length)[0];
-  return hit ? hit.label : id;
+  if (hit) return hit.label;
+  const gem = s.match(/^gemini-(\d+(?:\.\d+)?)-(pro|flash-lite|flash)/);
+  if (gem) {
+    const tier =
+      gem[2] === "pro" ? "Pro" : gem[2] === "flash-lite" ? "Flash-Lite" : "Flash";
+    return `Gemini ${gem[1]} ${tier}`;
+  }
+  return id;
 }
 
 // Phrase AskUserQuestion answers as a reply, for the reload fallback where the

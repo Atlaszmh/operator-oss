@@ -39,6 +39,14 @@ export const CLAUDE_CLI_PATH =
 export const CODEX_CLI_PATH = process.env.CODEX_CLI_PATH || "";
 
 /**
+ * Path to the `gemini` binary the Gemini driver drives (@google/gemini-cli).
+ * Empty = fall back to `gemini` on PATH (installed globally in the Docker image)
+ * or local node_modules/.bin/gemini. Set this to pin a specific binary when PATH
+ * is trimmed or a custom install should be used.
+ */
+export const GEMINI_CLI_PATH = process.env.GEMINI_CLI_PATH || "";
+
+/**
  * Opt-in to billing an environment-provided agent API key (ANTHROPIC_API_KEY /
  * ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY). Off by default: both entrypoints
  * strip those vars at boot (lib/env-keys.mjs — server.js and pty-server.js read

@@ -11,10 +11,11 @@ mkdir -p \
   "$HOME/.zen-orchestrator" \
   "${ORCH_WORKTREES_DIR:-$HOME/worktrees}" \
   "$HOME/projects" \
-  "$HOME/.claude"
+  "$HOME/.claude" \
+  "$HOME/.gemini"
 
 # Subscription login by default. If an agent key/token env var is present, the
-# `claude`/`codex` CLIs (and the Agent SDK child processes, and every pty shell
+# `claude`/`codex`/`gemini` CLIs (and the Agent SDK child processes, and every pty shell
 # — all inherit this environment) prefer it over the volume's stored login and
 # silently switch to per-token API billing. Strip them so a stray `-e` on
 # `docker run` can never do that — unless ORCH_ALLOW_API_KEY_ENV=1 explicitly
@@ -22,7 +23,7 @@ mkdir -p \
 # in-process (lib/env-keys.mjs) so bare-node deploys get the same guard; this
 # is the container backstop. See docs/DEPLOY.md → "Per-user claude login".
 if [[ "${ORCH_ALLOW_API_KEY_ENV:-}" != "1" && "${ORCH_ALLOW_API_KEY_ENV:-}" != "true" ]]; then
-  for _v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY; do
+  for _v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY; do
     if [[ -n "${!_v:-}" ]]; then
       echo "WARN: $_v was set in the container environment — unsetting it." \
            "Instances authenticate via the connected agent login (or a key saved in Settings);" \
